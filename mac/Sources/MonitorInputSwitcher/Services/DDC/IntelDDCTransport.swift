@@ -38,53 +38,61 @@ final class IntelDDCTransport: DDCTransport {
         defer { IOObjectRelease(iterator) }
 
         var framebuffer = IOIteratorNext(iterator)
-        var index = 0
+        var fbIndex = 0
         while framebuffer != 0 {
             defer {
                 IOObjectRelease(framebuffer)
                 framebuffer = IOIteratorNext(iterator)
             }
+            fbIndex += 1
+
+            var name = [CChar](repeating: 0, count: 128)
+            IORegistryEntryGetName(framebuffer, &name)
+            let fbName = String(cString: name)
 
             var busCount: IOItemCount = 0
-            guard IOFBGetI2CInterfaceCount(framebuffer, &busCount) == kIOReturnSuccess, busCount > 0 else {
+            let busCountResult = IOFBGetI2CInterfaceCount(framebuffer, &busCount)
+            NSLogInfo("IntelDDC: framebuffer #\(fbIndex) name=\(fbName) busCountResult=\(busCountResult) busCount=\(busCount)")
+            guard busCountResult == kIOReturnSuccess, busCount > 0 else {
                 continue
             }
 
-            var interface: io_service_t = 0
-            var found = false
             for bus in 0..<busCount {
-                if IOFBCopyI2CInterfaceForBus(framebuffer, IOOptionBits(bus), &interface) == kIOReturnSuccess {
-                    found = true
-                    break
+                var interface: io_service_t = 0
+                guard IOFBCopyI2CInterfaceForBus(framebuffer, IOOptionBits(bus), &interface) == kIOReturnSuccess, interface != 0 else {
+                    continue
                 }
+                result.append(IntelDDCTransport(displayName: "\(fbName) bus \(bus)", interface: interface))
             }
-            guard found, interface != 0 else { continue }
-
-            index += 1
-            result.append(IntelDDCTransport(displayName: "External Display \(index)", interface: interface))
         }
+        NSLogInfo("IntelDDC: discovered \(result.count) transport(s): \(result.map { $0.displayName })")
         return result
     }
 
     func write(_ bytes: [UInt8]) -> Bool {
         var connect: IOI2CConnectRef?
-        guard IOI2CInterfaceOpen(interface, 0, &connect) == kIOReturnSuccess, let connect else { return false }
+        guard IOI2CInterfaceOpen(interface, 0, &connect) == kIOReturnSuccess, let connect else {
+            NSLogError("IntelDDC: IOI2CInterfaceOpen failed")
+            return false
+        }
         defer { IOI2CInterfaceClose(connect, 0) }
 
-        var sendBuffer = bytes
+        let sendPtr = UnsafeMutableRawPointer.allocate(byteCount: max(bytes.count, 1), alignment: 1)
+        defer { sendPtr.deallocate() }
+        sendPtr.copyMemory(from: bytes, byteCount: bytes.count)
+
         var request = IOI2CRequest()
         request.commFlags = 0
         request.sendAddress = DDCProtocol.slaveAddress << 1
         request.sendTransactionType = IOOptionBits(kIOI2CSimpleTransactionType)
-        request.sendBytes = UInt32(sendBuffer.count)
+        request.sendBuffer = UInt(bitPattern: sendPtr)
+        request.sendBytes = UInt32(bytes.count)
         request.replyTransactionType = IOOptionBits(kIOI2CNoTransactionType)
         request.replyBytes = 0
 
-        let ok: Bool = sendBuffer.withUnsafeMutableBytes { raw -> Bool in
-            request.sendBuffer = UInt(bitPattern: raw.baseAddress)
-            return IOI2CSendRequest(connect, 0, &request) == kIOReturnSuccess && request.result == kIOReturnSuccess
-        }
-        return ok
+        let sendResult = IOI2CSendRequest(connect, 0, &request)
+        NSLogInfo("IntelDDC: write bytes=\(bytes.map { String(format: "%02X", $0) }.joined(separator: " ")) ioReturn=\(sendResult) request.result=\(request.result)")
+        return sendResult == kIOReturnSuccess && request.result == kIOReturnSuccess
     }
 
     /// Performs the write and the reply read as a single atomic

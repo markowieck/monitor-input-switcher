@@ -84,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
             let value = self.ddc.getCurrentInput()
+            NSLogInfo("refreshCurrentInput: parsed VCP value = \(String(describing: value))")
             DispatchQueue.main.async {
                 self.statusBar?.setCurrentVCPValue(value)
             }

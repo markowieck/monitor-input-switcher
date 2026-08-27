@@ -184,13 +184,13 @@ private struct InputMappingRows: View {
                 HStack(spacing: 10) {
                     TextField("", text: $input.name)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: Layout.inputNameWidth)
+                        .frame(width: Layout.inputNameWidth, alignment: .leading)
                     TextField("", text: $input.mqttValue)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: Layout.inputValueWidth)
+                        .frame(width: Layout.inputValueWidth, alignment: .leading)
                     TextField("", value: $input.vcpValue, formatter: NumberFormatter())
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: Layout.inputVCPWidth)
+                        .frame(width: Layout.inputVCPWidth, alignment: .leading)
                     Button(role: .destructive) {
                         inputs.removeAll { $0.id == input.id }
                     } label: {

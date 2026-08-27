@@ -9,12 +9,34 @@ final class DDCController {
     /// Re-scans for a controllable external display. Call this at
     /// startup and whenever a write/read fails, in case the monitor was
     /// unplugged/replugged or woke from sleep.
+    ///
+    /// A Mac can expose several I2C-capable transports (e.g. one
+    /// framebuffer per GPU output port, whether or not a real DDC/CI
+    /// monitor is actually attached there), and the OS API happily
+    /// reports success for all of them even when nothing real is on the
+    /// other end. To find the one that's actually the monitor, probe
+    /// each candidate with a real "Get VCP Feature" request and pick the
+    /// first one that returns a structurally valid reply.
     @discardableResult
     func refreshTransport() -> DDCTransport? {
         let transports = DDCTransportFactory.makeTransports()
+        NSLogInfo("refreshTransport: probing \(transports.count) candidate transport(s)")
+
+        let request = DDCProtocol.getVCPRequestPacket(vcpCode: DDCProtocol.inputSourceVCPCode)
+        for candidate in transports {
+            guard let reply = candidate.writeAndRead(request, replyLength: 11),
+                  DDCProtocol.parseVCPReply(reply) != nil else {
+                continue
+            }
+            NSLogInfo("refreshTransport: \(candidate.displayName) responded with a valid DDC/CI reply, using it")
+            transport = candidate
+            return candidate
+        }
+
+        NSLogError("refreshTransport: no transport returned a valid DDC/CI reply; falling back to the first candidate")
         transport = transports.first
         if let transport {
-            NSLogInfo("Using DDC transport for \(transport.displayName)")
+            NSLogInfo("Using DDC transport for \(transport.displayName) (unvalidated)")
         } else {
             NSLogError("No controllable external display found")
         }
@@ -48,6 +70,10 @@ final class DDCController {
             NSLogError("getCurrentInput: failed to parse reply \(reply.map { String(format: "%02X", $0) }.joined(separator: " "))")
             return nil
         }
-        return Int(parsed.currentValue)
+        // Input Source is a non-continuous (enumerated) VCP feature, so
+        // the meaningful value fits in one byte - some monitors don't
+        // zero the high byte for these, so mask it off rather than
+        // trusting the full 16-bit value.
+        return Int(parsed.currentValue & 0xFF)
     }
 }
