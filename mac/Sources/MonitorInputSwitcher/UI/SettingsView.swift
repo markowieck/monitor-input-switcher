@@ -29,14 +29,7 @@ struct SettingsView: View {
                 FormRow("Port") {
                     TextField("", value: $store.settings.mqttPort, formatter: NumberFormatter())
                 }
-                FormRow("") {
-                    HStack {
-                        Text("Use TLS")
-                        Spacer()
-                        Toggle("", isOn: $store.settings.mqttUseTLS)
-                            .labelsHidden()
-                    }
-                }
+                ToggleRow(label: "Use TLS", isOn: $store.settings.mqttUseTLS)
                 FormRow("Username") {
                     TextField("", text: $store.settings.mqttUsername, prompt: Text("optional"))
                 }
@@ -75,20 +68,13 @@ struct SettingsView: View {
             }
 
             Section {
-                FormRow("") {
-                    HStack {
-                        Text("Start at Login")
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { store.settings.launchAtLogin },
-                            set: { newValue in
-                                store.settings.launchAtLogin = newValue
-                                LoginItemService.setEnabled(newValue)
-                            }
-                        ))
-                        .labelsHidden()
+                ToggleRow(label: "Start at Login", isOn: Binding(
+                    get: { store.settings.launchAtLogin },
+                    set: { newValue in
+                        store.settings.launchAtLogin = newValue
+                        LoginItemService.setEnabled(newValue)
                     }
-                }
+                ))
                 FormRow("Current Input") {
                     HStack {
                         Spacer()
@@ -130,6 +116,27 @@ private struct FormRow<Content: View>: View {
     }
 }
 
+/// A toggle row that spans the full row width, flush with the section's
+/// left edge - unlike `FormRow`, it doesn't reserve a label column, since
+/// there's no separate label/field pair here, just one line of text with
+/// its switch at the trailing edge (matching how toggle rows look in
+/// System Settings). Label color matches `FormRow`'s labels so every row
+/// in the form uses the same text color.
+private struct ToggleRow: View {
+    let label: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+        }
+    }
+}
+
 private struct ConnectionStatusLabel: View {
     let result: String?
 
@@ -166,7 +173,7 @@ private struct InputMappingRows: View {
                 Text("MQTT Value")
                     .frame(width: Layout.inputValueWidth, alignment: .leading)
                 Text("VCP Value")
-                    .frame(width: Layout.inputVCPWidth, alignment: .trailing)
+                    .frame(width: Layout.inputVCPWidth, alignment: .leading)
                 Spacer()
                     .frame(width: Layout.deleteButtonWidth)
             }
@@ -183,7 +190,6 @@ private struct InputMappingRows: View {
                         .frame(width: Layout.inputValueWidth)
                     TextField("", value: $input.vcpValue, formatter: NumberFormatter())
                         .textFieldStyle(.roundedBorder)
-                        .multilineTextAlignment(.trailing)
                         .frame(width: Layout.inputVCPWidth)
                     Button(role: .destructive) {
                         inputs.removeAll { $0.id == input.id }
