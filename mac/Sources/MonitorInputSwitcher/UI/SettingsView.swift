@@ -127,9 +127,10 @@ private struct ToggleRow: View {
     @Binding var isOn: Bool
 
     var body: some View {
-        HStack {
+        HStack(spacing: 12) {
             Text(label)
                 .foregroundStyle(.secondary)
+                .frame(width: Layout.labelWidth, alignment: .trailing)
             Spacer()
             Toggle("", isOn: $isOn)
                 .labelsHidden()
