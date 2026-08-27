@@ -5,30 +5,30 @@ struct SettingsView: View {
     var onTestConnection: () -> Void
     var onManualRefreshInput: () -> Void
 
+    private let labelWidth: CGFloat = 90
+
     var body: some View {
         Form {
             Section {
-                LabeledContent("Server") {
-                    TextField("", text: $store.settings.mqttHost, prompt: Text("mqtt.example.com"))
-                        .textFieldStyle(.roundedBorder)
-                }
-                LabeledContent("Port") {
-                    TextField("", value: $store.settings.mqttPort, formatter: NumberFormatter())
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 90)
-                }
-                Toggle("Use TLS", isOn: $store.settings.mqttUseTLS)
-                LabeledContent("Username") {
-                    TextField("", text: $store.settings.mqttUsername, prompt: Text("optional"))
-                        .textFieldStyle(.roundedBorder)
-                }
-                LabeledContent("Password") {
-                    SecureField("", text: $store.mqttPassword, prompt: Text("optional"))
-                        .textFieldStyle(.roundedBorder)
-                }
-                LabeledContent("Topic") {
-                    TextField("", text: $store.settings.mqttTopic, prompt: Text("home/monitor/input"))
-                        .textFieldStyle(.roundedBorder)
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
+                    formRow("Server") {
+                        TextField("", text: $store.settings.mqttHost, prompt: Text("mqtt.example.com"))
+                    }
+                    formRow("Port") {
+                        TextField("", value: $store.settings.mqttPort, formatter: NumberFormatter())
+                    }
+                    formRow("") {
+                        Toggle("Use TLS", isOn: $store.settings.mqttUseTLS)
+                    }
+                    formRow("Username") {
+                        TextField("", text: $store.settings.mqttUsername, prompt: Text("optional"))
+                    }
+                    formRow("Password") {
+                        SecureField("", text: $store.mqttPassword, prompt: Text("optional"))
+                    }
+                    formRow("Topic") {
+                        TextField("", text: $store.settings.mqttTopic, prompt: Text("home/monitor/input"))
+                    }
                 }
 
                 HStack {
@@ -58,16 +58,19 @@ struct SettingsView: View {
             }
 
             Section {
-                Toggle("Start at Login", isOn: Binding(
-                    get: { store.settings.launchAtLogin },
-                    set: { newValue in
-                        store.settings.launchAtLogin = newValue
-                        LoginItemService.setEnabled(newValue)
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
+                    formRow("") {
+                        Toggle("Start at Login", isOn: Binding(
+                            get: { store.settings.launchAtLogin },
+                            set: { newValue in
+                                store.settings.launchAtLogin = newValue
+                                LoginItemService.setEnabled(newValue)
+                            }
+                        ))
                     }
-                ))
-
-                LabeledContent("Current Input") {
-                    Button("Refresh Now") { onManualRefreshInput() }
+                    formRow("Current Input") {
+                        Button("Refresh Now") { onManualRefreshInput() }
+                    }
                 }
             } header: {
                 Text("General")
@@ -75,6 +78,22 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 560, height: 720)
+    }
+
+    /// A two-column grid row: a fixed-width, trailing-aligned label and a
+    /// content view that stretches to fill the rest of the row. Used
+    /// instead of `LabeledContent` so every row's field lines up on the
+    /// same left/right edges regardless of label length or field type.
+    @ViewBuilder
+    private func formRow<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        GridRow {
+            Text(label)
+                .foregroundStyle(.secondary)
+                .frame(width: labelWidth, alignment: .trailing)
+            content()
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 
@@ -119,8 +138,10 @@ private struct InputMappingRows: View {
                 GridRow {
                     TextField("", text: $input.name)
                         .textFieldStyle(.roundedBorder)
+                        .frame(minWidth: 130)
                     TextField("", text: $input.mqttValue)
                         .textFieldStyle(.roundedBorder)
+                        .frame(minWidth: 130)
                     TextField("", value: $input.vcpValue, formatter: NumberFormatter())
                         .textFieldStyle(.roundedBorder)
                         .multilineTextAlignment(.trailing)
