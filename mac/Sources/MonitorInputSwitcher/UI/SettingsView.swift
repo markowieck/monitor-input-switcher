@@ -181,12 +181,15 @@ private struct InputMappingRows: View {
                 HStack(spacing: 10) {
                     TextField("", text: $input.name)
                         .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     TextField("", text: $input.mqttValue)
                         .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     TextField("", value: $input.vcpValue, formatter: NumberFormatter())
                         .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.leading)
                         .frame(width: Layout.inputVCPWidth, alignment: .leading)
                     Button(role: .destructive) {
                         inputs.removeAll { $0.id == input.id }
@@ -199,5 +202,6 @@ private struct InputMappingRows: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
