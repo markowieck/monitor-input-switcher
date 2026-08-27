@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        setUpMainMenu()
 
         ddc.refreshTransport()
 
@@ -115,5 +116,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         probe.start(settings: settingsStore.settings, password: settingsStore.mqttPassword)
+    }
+
+    /// This app has no Xcode-generated main menu (no MainMenu.xib / no
+    /// SwiftUI `App` scene), so without this, standard editing shortcuts
+    /// like Cmd+C/Cmd+V/Cmd+A don't reliably reach text fields in the
+    /// Settings window. A minimal Edit menu with the standard
+    /// selectors/key equivalents, targeted at the first responder, is
+    /// enough to enable them.
+    private func setUpMainMenu() {
+        let mainMenu = NSMenu()
+
+        let appMenuItem = NSMenuItem()
+        mainMenu.addItem(appMenuItem)
+        let appMenu = NSMenu()
+        appMenuItem.submenu = appMenu
+        appMenu.addItem(withTitle: "Quit Monitor Input Switcher", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+
+        let editMenuItem = NSMenuItem()
+        mainMenu.addItem(editMenuItem)
+        let editMenu = NSMenu(title: "Edit")
+        editMenuItem.submenu = editMenu
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
+        NSApp.mainMenu = mainMenu
     }
 }
