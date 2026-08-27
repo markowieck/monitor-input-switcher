@@ -9,8 +9,6 @@ import SwiftUI
 /// entirely - there's no auto-sizing left to disagree.
 private enum Layout {
     static let labelWidth: CGFloat = 90
-    static let inputNameWidth: CGFloat = 150
-    static let inputValueWidth: CGFloat = 150
     static let inputVCPWidth: CGFloat = 70
     static let deleteButtonWidth: CGFloat = 20
 }
@@ -116,12 +114,10 @@ private struct FormRow<Content: View>: View {
     }
 }
 
-/// A toggle row that spans the full row width, flush with the section's
-/// left edge - unlike `FormRow`, it doesn't reserve a label column, since
-/// there's no separate label/field pair here, just one line of text with
-/// its switch at the trailing edge (matching how toggle rows look in
-/// System Settings). Label color matches `FormRow`'s labels so every row
-/// in the form uses the same text color.
+/// A toggle row that reserves the same `Layout.labelWidth` label column as
+/// `FormRow`, so its label lines up with every other row's label - the
+/// toggle itself sits at the trailing edge (matching how toggle rows look
+/// in System Settings).
 private struct ToggleRow: View {
     let label: String
     @Binding var isOn: Bool
@@ -170,9 +166,9 @@ private struct InputMappingRows: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 Text("Name")
-                    .frame(width: Layout.inputNameWidth, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 Text("MQTT Value")
-                    .frame(width: Layout.inputValueWidth, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 Text("VCP Value")
                     .frame(width: Layout.inputVCPWidth, alignment: .leading)
                 Spacer()
@@ -185,10 +181,10 @@ private struct InputMappingRows: View {
                 HStack(spacing: 10) {
                     TextField("", text: $input.name)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: Layout.inputNameWidth, alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     TextField("", text: $input.mqttValue)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: Layout.inputValueWidth, alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     TextField("", value: $input.vcpValue, formatter: NumberFormatter())
                         .textFieldStyle(.roundedBorder)
                         .frame(width: Layout.inputVCPWidth, alignment: .leading)
