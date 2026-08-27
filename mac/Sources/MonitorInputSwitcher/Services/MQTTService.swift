@@ -38,6 +38,13 @@ final class MQTTService {
         guard !settings.mqttHost.isEmpty else { return }
         currentTopic = settings.mqttTopic
 
+        // MQTTClient requires an explicit shutdown before it's deallocated
+        // (it traps in deinit otherwise) - never just overwrite `client`.
+        if let previous = client {
+            client = nil
+            try? previous.syncShutdownGracefully()
+        }
+
         let clientId = "monitor-input-switcher-\(settings.clientIdSuffix)"
         let newClient = MQTTClient(
             host: settings.mqttHost,

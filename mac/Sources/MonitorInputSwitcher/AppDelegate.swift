@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusBar: StatusBarController?
     private var settingsWindow: SettingsWindowController?
+    private var connectionProbe: MQTTService?
     private var cancellables = Set<AnyCancellable>()
 
     private var pollTimer: Timer?
@@ -27,6 +28,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mqtt.onConnectionStateChanged = { [weak self] connected in self?.statusBar?.setMQTTConnected(connected) }
 
         settingsStore.$settings
+            // Settings fields are bound live to the Settings UI, so every
+            // keystroke publishes a new value - debounce so we don't tear
+            // down/reconnect MQTT (and hammer partially-typed hostnames)
+            // on every character typed.
+            .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
             .removeDuplicates { old, new in
                 old.mqttHost == new.mqttHost &&
                 old.mqttPort == new.mqttPort &&
@@ -95,8 +101,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func testMQTTConnection() {
+        connectionProbe?.stop()
+
         settingsStore.connectionTestResult = "Connecting…"
         let probe = MQTTService()
+        connectionProbe = probe
         probe.onConnectionStateChanged = { [weak self, weak probe] connected in
             self?.settingsStore.connectionTestResult = connected ? "Connected ✓" : "Connection failed"
             if connected {
