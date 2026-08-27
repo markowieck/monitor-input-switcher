@@ -99,6 +99,19 @@ final class DDCController {
         return retried.write(packet)
     }
 
+    /// Reads back an arbitrary VCP feature (current, max), unmasked. Handy
+    /// for diagnostics, e.g. checking VCP 0xD6 (Power Mode) to see
+    /// whether the monitor reports itself as on/standby/suspended.
+    func getVCPValue(code: UInt8) -> (current: Int, max: Int)? {
+        guard let transport = transport ?? refreshTransport() else { return nil }
+        let request = DDCProtocol.getVCPRequestPacket(vcpCode: code)
+        guard let parsed = Self.getVCPReplyWithRetries(transport: transport, request: request) else {
+            NSLogError("getVCPValue(0x\(String(code, radix: 16))): no valid reply from \(transport.displayName)")
+            return nil
+        }
+        return (Int(parsed.currentValue), Int(parsed.maxValue))
+    }
+
     /// Reads back the monitor's current input source VCP value. Keeps
     /// using the already-validated cached transport rather than
     /// rescanning on every transient failure - rescanning re-probes every
