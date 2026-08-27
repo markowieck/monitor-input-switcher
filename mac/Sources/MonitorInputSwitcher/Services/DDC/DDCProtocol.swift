@@ -51,4 +51,17 @@ enum DDCProtocol {
 
     /// VCP feature code for "Input Source Select".
     static let inputSourceVCPCode: UInt8 = 0x60
+
+    /// VCP feature code for "Power Mode" (aka DPM/DPMS state).
+    static let powerModeVCPCode: UInt8 = 0xD6
+    /// "Power Mode" value meaning "on" - the standard DDC/CI way to ask a
+    /// monitor to wake from standby/suspend before sending it further
+    /// commands (e.g. before switching its input), since a sleeping
+    /// monitor often won't act on other VCP writes.
+    static let powerOnValue: UInt16 = 0x01
+
+    /// A "wake up" packet: sets Power Mode to on.
+    static func powerOnPacket() -> [UInt8] {
+        setVCPPacket(vcpCode: powerModeVCPCode, value: powerOnValue)
+    }
 }

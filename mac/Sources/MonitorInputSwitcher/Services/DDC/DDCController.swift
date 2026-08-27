@@ -24,13 +24,24 @@ final class DDCController {
 
         let request = DDCProtocol.getVCPRequestPacket(vcpCode: DDCProtocol.inputSourceVCPCode)
         for candidate in transports {
-            guard let reply = candidate.writeAndRead(request, replyLength: 11),
-                  DDCProtocol.parseVCPReply(reply) != nil else {
+            guard Self.getVCPReplyWithRetries(transport: candidate, request: request) != nil else {
                 continue
             }
             NSLogInfo("refreshTransport: \(candidate.displayName) responded with a valid DDC/CI reply, using it")
             transport = candidate
             return candidate
+        }
+
+        // None of the candidates validated - this can happen when the
+        // monitor is just temporarily busy. Guessing at an unvalidated
+        // candidate here has been observed to silently pick the wrong
+        // one (writes "succeed" against a port with nothing attached),
+        // so keep whatever was previously validated rather than
+        // downgrading to a guess. Only guess if we've never had a
+        // working transport at all.
+        if let transport {
+            NSLogError("refreshTransport: no transport validated this time; keeping the previously validated \(transport.displayName)")
+            return transport
         }
 
         NSLogError("refreshTransport: no transport returned a valid DDC/CI reply; falling back to the first candidate")
@@ -43,31 +54,62 @@ final class DDCController {
         return transport
     }
 
+    /// DDC/CI monitors are notoriously flaky about responding to any
+    /// single request (bus contention, the monitor's own firmware being
+    /// slow, etc.) - established DDC/CI tools all retry a few times
+    /// before giving up on a feature read, so we do the same here.
+    private static func getVCPReplyWithRetries(transport: DDCTransport, request: [UInt8], attempts: Int = 4) -> DDCProtocol.VCPReply? {
+        for attempt in 1...attempts {
+            if let reply = transport.writeAndRead(request, replyLength: 11),
+               let parsed = DDCProtocol.parseVCPReply(reply) {
+                return parsed
+            }
+            if attempt < attempts {
+                Thread.sleep(forTimeInterval: 0.3)
+            }
+        }
+        return nil
+    }
+
     var currentDisplayName: String? { transport?.displayName }
 
     @discardableResult
     func setInput(vcpValue: Int) -> Bool {
         guard let transport = transport ?? refreshTransport() else { return false }
         let packet = DDCProtocol.setVCPPacket(vcpCode: DDCProtocol.inputSourceVCPCode, value: UInt16(clamping: vcpValue))
-        let ok = transport.write(packet)
-        if !ok {
-            NSLogError("Failed to write VCP input source \(vcpValue), retrying after rescan")
-            guard let retried = refreshTransport() else { return false }
-            return retried.write(packet)
+
+        // Switching away from this Mac's own input to a source with
+        // nothing on it can put the monitor into standby; a monitor in
+        // standby often won't act on further VCP writes. Sending a
+        // "Power On" (VCP 0xD6 = 1) first is the standard DDC/CI way to
+        // wake it before the actual input switch, giving it a moment to
+        // come back before the switch itself.
+        transport.write(DDCProtocol.powerOnPacket())
+        Thread.sleep(forTimeInterval: 0.3)
+
+        for attempt in 1...3 {
+            if transport.write(packet) { return true }
+            if attempt < 3 { Thread.sleep(forTimeInterval: 0.3) }
         }
-        return ok
+
+        NSLogError("Failed to write VCP input source \(vcpValue) after retries, rescanning for a different transport")
+        guard let retried = refreshTransport() else { return false }
+        retried.write(DDCProtocol.powerOnPacket())
+        Thread.sleep(forTimeInterval: 0.3)
+        return retried.write(packet)
     }
 
-    /// Reads back the monitor's current input source VCP value.
+    /// Reads back the monitor's current input source VCP value. Keeps
+    /// using the already-validated cached transport rather than
+    /// rescanning on every transient failure - rescanning re-probes every
+    /// candidate transport, which is itself extra DDC/CI bus traffic and
+    /// was observed to make a temporarily-busy monitor even less
+    /// responsive rather than more.
     func getCurrentInput() -> Int? {
         guard let transport = transport ?? refreshTransport() else { return nil }
         let request = DDCProtocol.getVCPRequestPacket(vcpCode: DDCProtocol.inputSourceVCPCode)
-        guard let reply = transport.writeAndRead(request, replyLength: 11) else {
-            NSLogError("getCurrentInput: writeAndRead failed")
-            return nil
-        }
-        guard let parsed = DDCProtocol.parseVCPReply(reply) else {
-            NSLogError("getCurrentInput: failed to parse reply \(reply.map { String(format: "%02X", $0) }.joined(separator: " "))")
+        guard let parsed = Self.getVCPReplyWithRetries(transport: transport, request: request) else {
+            NSLogError("getCurrentInput: no valid reply from \(transport.displayName)")
             return nil
         }
         // Input Source is a non-continuous (enumerated) VCP feature, so
