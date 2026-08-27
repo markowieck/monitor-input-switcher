@@ -1,40 +1,57 @@
 import SwiftUI
 
+/// Fixed column widths used throughout the form so every row - text
+/// fields, toggles, buttons, table columns - lines up exactly. SwiftUI's
+/// `Grid` sizes each column from its cells' *ideal* size, which for a
+/// `TextField` is effectively "as much as it can get"; mixed with rows of
+/// different content that produced visibly inconsistent widths. Using the
+/// same explicit width on every corresponding cell sidesteps that
+/// entirely - there's no auto-sizing left to disagree.
+private enum Layout {
+    static let labelWidth: CGFloat = 90
+    static let inputNameWidth: CGFloat = 150
+    static let inputValueWidth: CGFloat = 150
+    static let inputVCPWidth: CGFloat = 70
+    static let deleteButtonWidth: CGFloat = 20
+}
+
 struct SettingsView: View {
     @ObservedObject var store: SettingsStore
     var onTestConnection: () -> Void
     var onManualRefreshInput: () -> Void
 
-    private let labelWidth: CGFloat = 90
-
     var body: some View {
         Form {
             Section {
-                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
-                    formRow("Server") {
-                        TextField("", text: $store.settings.mqttHost, prompt: Text("mqtt.example.com"))
-                    }
-                    formRow("Port") {
-                        TextField("", value: $store.settings.mqttPort, formatter: NumberFormatter())
-                    }
-                    formRow("") {
-                        Toggle("Use TLS", isOn: $store.settings.mqttUseTLS)
-                    }
-                    formRow("Username") {
-                        TextField("", text: $store.settings.mqttUsername, prompt: Text("optional"))
-                    }
-                    formRow("Password") {
-                        SecureField("", text: $store.mqttPassword, prompt: Text("optional"))
-                    }
-                    formRow("Topic") {
-                        TextField("", text: $store.settings.mqttTopic, prompt: Text("home/monitor/input"))
+                FormRow("Server") {
+                    TextField("", text: $store.settings.mqttHost, prompt: Text("mqtt.example.com"))
+                }
+                FormRow("Port") {
+                    TextField("", value: $store.settings.mqttPort, formatter: NumberFormatter())
+                }
+                FormRow("") {
+                    HStack {
+                        Text("Use TLS")
+                        Spacer()
+                        Toggle("", isOn: $store.settings.mqttUseTLS)
+                            .labelsHidden()
                     }
                 }
-
-                HStack {
-                    ConnectionStatusLabel(result: store.connectionTestResult)
-                    Spacer()
-                    Button("Test Connection") { onTestConnection() }
+                FormRow("Username") {
+                    TextField("", text: $store.settings.mqttUsername, prompt: Text("optional"))
+                }
+                FormRow("Password") {
+                    SecureField("", text: $store.mqttPassword, prompt: Text("optional"))
+                }
+                FormRow("Topic") {
+                    TextField("", text: $store.settings.mqttTopic, prompt: Text("home/monitor/input"))
+                }
+                FormRow("") {
+                    HStack {
+                        ConnectionStatusLabel(result: store.connectionTestResult)
+                        Spacer()
+                        Button("Test Connection") { onTestConnection() }
+                    }
                 }
             } header: {
                 Text("MQTT Broker")
@@ -58,17 +75,23 @@ struct SettingsView: View {
             }
 
             Section {
-                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
-                    formRow("") {
-                        Toggle("Start at Login", isOn: Binding(
+                FormRow("") {
+                    HStack {
+                        Text("Start at Login")
+                        Spacer()
+                        Toggle("", isOn: Binding(
                             get: { store.settings.launchAtLogin },
                             set: { newValue in
                                 store.settings.launchAtLogin = newValue
                                 LoginItemService.setEnabled(newValue)
                             }
                         ))
+                        .labelsHidden()
                     }
-                    formRow("Current Input") {
+                }
+                FormRow("Current Input") {
+                    HStack {
+                        Spacer()
                         Button("Refresh Now") { onManualRefreshInput() }
                     }
                 }
@@ -79,18 +102,28 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 560, height: 720)
     }
+}
 
-    /// A two-column grid row: a fixed-width, trailing-aligned label and a
-    /// content view that stretches to fill the rest of the row. Used
-    /// instead of `LabeledContent` so every row's field lines up on the
-    /// same left/right edges regardless of label length or field type.
-    @ViewBuilder
-    private func formRow<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
-        GridRow {
+/// A single settings row: a fixed-width, trailing-aligned label followed
+/// by content that fills the rest of the row's width. Every row - across
+/// every section - uses the exact same `Layout.labelWidth`, so all the
+/// label text lines up on one edge and all the fields/controls line up on
+/// the other, independent of label text length or control type.
+private struct FormRow<Content: View>: View {
+    let label: String
+    @ViewBuilder let content: Content
+
+    init(_ label: String, @ViewBuilder content: () -> Content) {
+        self.label = label
+        self.content = content()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
             Text(label)
                 .foregroundStyle(.secondary)
-                .frame(width: labelWidth, alignment: .trailing)
-            content()
+                .frame(width: Layout.labelWidth, alignment: .trailing)
+            content
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -126,26 +159,32 @@ private struct InputMappingRows: View {
     @Binding var inputs: [InputMapping]
 
     var body: some View {
-        Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
-            GridRow {
-                Text("Name").gridColumnHeader
-                Text("MQTT Value").gridColumnHeader
-                Text("VCP Value").gridColumnHeader
-                Color.clear.frame(width: 20)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Text("Name")
+                    .frame(width: Layout.inputNameWidth, alignment: .leading)
+                Text("MQTT Value")
+                    .frame(width: Layout.inputValueWidth, alignment: .leading)
+                Text("VCP Value")
+                    .frame(width: Layout.inputVCPWidth, alignment: .trailing)
+                Spacer()
+                    .frame(width: Layout.deleteButtonWidth)
             }
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
             ForEach($inputs) { $input in
-                GridRow {
+                HStack(spacing: 10) {
                     TextField("", text: $input.name)
                         .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 130)
+                        .frame(width: Layout.inputNameWidth)
                     TextField("", text: $input.mqttValue)
                         .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 130)
+                        .frame(width: Layout.inputValueWidth)
                     TextField("", value: $input.vcpValue, formatter: NumberFormatter())
                         .textFieldStyle(.roundedBorder)
                         .multilineTextAlignment(.trailing)
-                        .frame(minWidth: 90)
+                        .frame(width: Layout.inputVCPWidth)
                     Button(role: .destructive) {
                         inputs.removeAll { $0.id == input.id }
                     } label: {
@@ -153,15 +192,9 @@ private struct InputMappingRows: View {
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
+                    .frame(width: Layout.deleteButtonWidth)
                 }
             }
         }
-    }
-}
-
-private extension Text {
-    var gridColumnHeader: some View {
-        self.font(.caption)
-            .foregroundStyle(.secondary)
     }
 }
