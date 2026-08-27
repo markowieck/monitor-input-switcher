@@ -116,20 +116,19 @@ private struct FormRow<Content: View>: View {
     }
 }
 
-/// A toggle row that spans the full row width, flush with the section's
-/// left edge - unlike `FormRow`, it doesn't reserve a label column, since
-/// there's no separate label/field pair here, just one line of text with
-/// its switch at the trailing edge (matching how toggle rows look in
-/// System Settings). Label color matches `FormRow`'s labels so every row
-/// in the form uses the same text color.
+/// A toggle row that reserves the same `Layout.labelWidth` label column as
+/// `FormRow`, so its label lines up with every other row's label - the
+/// toggle itself sits at the trailing edge (matching how toggle rows look
+/// in System Settings).
 private struct ToggleRow: View {
     let label: String
     @Binding var isOn: Bool
 
     var body: some View {
-        HStack {
+        HStack(spacing: 12) {
             Text(label)
                 .foregroundStyle(.secondary)
+                .frame(width: Layout.labelWidth, alignment: .trailing)
             Spacer()
             Toggle("", isOn: $isOn)
                 .labelsHidden()
