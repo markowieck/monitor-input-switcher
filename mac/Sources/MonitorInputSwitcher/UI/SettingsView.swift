@@ -22,20 +22,23 @@ struct SettingsView: View {
         Form {
             Section {
                 FormRow("Server") {
-                    TextField("", text: $store.settings.mqttHost, prompt: Text("mqtt.example.com"))
+                    PlainTextField(text: $store.settings.mqttHost, placeholder: "mqtt.example.com")
                 }
                 FormRow("Port") {
-                    TextField("", value: $store.settings.mqttPort, formatter: NumberFormatter())
+                    PlainTextField(text: Binding(
+                        get: { String(store.settings.mqttPort) },
+                        set: { store.settings.mqttPort = Int($0.filter(\.isNumber)) ?? 0 }
+                    ))
                 }
                 ToggleRow(label: "Use TLS", isOn: $store.settings.mqttUseTLS)
                 FormRow("Username") {
-                    TextField("", text: $store.settings.mqttUsername, prompt: Text("optional"))
+                    PlainTextField(text: $store.settings.mqttUsername, placeholder: "optional")
                 }
                 FormRow("Password") {
-                    SecureField("", text: $store.mqttPassword, prompt: Text("optional"))
+                    PlainTextField(text: $store.mqttPassword, isSecure: true, placeholder: "optional")
                 }
                 FormRow("Topic") {
-                    TextField("", text: $store.settings.mqttTopic, prompt: Text("home/monitor/input"))
+                    PlainTextField(text: $store.settings.mqttTopic, placeholder: "home/monitor/input")
                 }
                 FormRow("") {
                     HStack {
@@ -108,7 +111,6 @@ private struct FormRow<Content: View>: View {
                 .foregroundStyle(.secondary)
                 .frame(width: Layout.labelWidth, alignment: .trailing)
             content
-                .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -179,11 +181,11 @@ private struct InputMappingRows: View {
 
             ForEach($inputs) { $input in
                 HStack(spacing: 10) {
-                    LeftAlignedTextField(text: $input.name)
+                    PlainTextField(text: $input.name)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    LeftAlignedTextField(text: $input.mqttValue)
+                    PlainTextField(text: $input.mqttValue)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    LeftAlignedTextField(text: Binding(
+                    PlainTextField(text: Binding(
                         get: { String(input.vcpValue) },
                         set: { input.vcpValue = Int($0.filter(\.isNumber)) ?? 0 }
                     ))
@@ -203,19 +205,22 @@ private struct InputMappingRows: View {
     }
 }
 
-/// SwiftUI's `TextField` on macOS ignores `.multilineTextAlignment(.leading)`
-/// when styled with `.roundedBorder` inside a `Form` - the underlying
-/// `NSTextField` keeps rendering its content trailing-aligned regardless.
-/// A plain `NSTextField` sidesteps that, but its native bezel draws a
-/// visibly lighter fill than `.roundedBorder`'s outline-only look - so the
-/// chrome (border/corner radius) is drawn here in SwiftUI to match the rest
-/// of the form exactly, with the `NSTextField` underneath left completely
-/// unstyled (no bezel, no fill) and used only for text input and alignment.
-private struct LeftAlignedTextField: View {
+/// `TextField`/`SecureField` render their content right-aligned when
+/// placed inside a `Form` with `.formStyle(.grouped)` on macOS -
+/// `.multilineTextAlignment(.leading)` has no effect on that. A plain
+/// `NSTextField`/`NSSecureTextField` sidesteps it; its chrome (border/
+/// corner radius) is drawn here in SwiftUI to match `.roundedBorder`'s
+/// look, with the underlying field left completely unstyled (no native
+/// bezel/background) and used only for text input and alignment. Every
+/// text field in this form uses this same component so they all render
+/// identically.
+private struct PlainTextField: View {
     @Binding var text: String
+    var isSecure: Bool = false
+    var placeholder: String? = nil
 
     var body: some View {
-        LeftAlignedTextFieldRepresentable(text: $text)
+        PlainTextFieldRepresentable(text: $text, isSecure: isSecure, placeholder: placeholder)
             .padding(.horizontal, 7)
             .frame(height: 22)
             .overlay(
@@ -225,16 +230,19 @@ private struct LeftAlignedTextField: View {
     }
 }
 
-private struct LeftAlignedTextFieldRepresentable: NSViewRepresentable {
+private struct PlainTextFieldRepresentable: NSViewRepresentable {
     @Binding var text: String
+    var isSecure: Bool
+    var placeholder: String?
 
     func makeNSView(context: Context) -> NSTextField {
-        let field = NSTextField()
+        let field = isSecure ? NSSecureTextField() : NSTextField()
         field.isBordered = false
         field.isBezeled = false
         field.drawsBackground = false
         field.focusRingType = .none
         field.alignment = .left
+        field.placeholderString = placeholder
         field.delegate = context.coordinator
         return field
     }
