@@ -101,13 +101,33 @@ final class AppleSiliconDDCTransport: DDCTransport {
         return (vendor, product)
     }
 
+    /// `DDCProtocol` builds packets as `[0x51] + body + [checksum]`, framed
+    /// for transports (like `IntelDDCTransport`) that send the whole thing
+    /// as one continuous I2C payload. `IOAVServiceWriteI2C`/`ReadI2C` instead
+    /// take that `0x51` "data address" as its own parameter (passed
+    /// separately below) - re-including it as the packet's first byte shifts
+    /// every following byte by one and invalidates the checksum, so the
+    /// monitor silently discards the whole packet. This re-frames the packet
+    /// to what the private API actually expects: the body alone, with the
+    /// checksum recomputed over just the body (seed `0x6E` for a single-byte
+    /// "Get VCP" command, `0x6E ^ 0x51` for a multi-byte "Set VCP"/write
+    /// command) - matching the reverse-engineered reference implementation
+    /// this API is based on (waydabber/AppleSiliconDDC).
+    private func reframeForIOAVService(_ ddcProtocolPacket: [UInt8]) -> [UInt8] {
+        let body = Array(ddcProtocolPacket.dropFirst().dropLast())
+        let seed: UInt8 = body.first == 0x82 ? 0x6E : 0x6E ^ 0x51
+        let checksum = body.reduce(seed) { $0 ^ $1 }
+        return body + [checksum]
+    }
+
     func write(_ bytes: [UInt8]) -> Bool {
         guard let writeFn = Self.writeFn else { return false }
-        let result = bytes.withUnsafeBytes { rawBuffer -> IOReturn in
+        let packet = reframeForIOAVService(bytes)
+        let result = packet.withUnsafeBytes { rawBuffer -> IOReturn in
             guard let baseAddress = rawBuffer.baseAddress else { return kIOReturnError }
-            return writeFn(service, DDCProtocol.slaveAddress, 0x51, baseAddress, UInt32(bytes.count))
+            return writeFn(service, DDCProtocol.slaveAddress, 0x51, baseAddress, UInt32(packet.count))
         }
-        NSLogInfo("AppleSiliconDDC: write bytes=\(bytes.map { String(format: "%02X", $0) }.joined(separator: " ")) ioReturn=\(result)")
+        NSLogInfo("AppleSiliconDDC: write bytes=\(packet.map { String(format: "%02X", $0) }.joined(separator: " ")) ioReturn=\(result)")
         return result == kIOReturnSuccess
     }
 
