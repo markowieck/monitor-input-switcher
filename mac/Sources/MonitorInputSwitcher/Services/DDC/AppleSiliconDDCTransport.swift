@@ -19,8 +19,8 @@ final class AppleSiliconDDCTransport: DDCTransport {
     let displayName: String
     private let service: AnyObject
 
-    private typealias ReadFn = @convention(c) (AnyObject, UInt32, UInt32, NSMutableData, UInt32) -> IOReturn
-    private typealias WriteFn = @convention(c) (AnyObject, UInt32, UInt32, NSData, UInt32) -> IOReturn
+    private typealias ReadFn = @convention(c) (AnyObject, UInt32, UInt32, UnsafeMutableRawPointer, UInt32) -> IOReturn
+    private typealias WriteFn = @convention(c) (AnyObject, UInt32, UInt32, UnsafeRawPointer, UInt32) -> IOReturn
     private typealias CreateWithServiceFn = @convention(c) (CFAllocator?, io_service_t) -> Unmanaged<AnyObject>?
 
     private static let handle: UnsafeMutableRawPointer? =
@@ -92,8 +92,10 @@ final class AppleSiliconDDCTransport: DDCTransport {
 
     func write(_ bytes: [UInt8]) -> Bool {
         guard let writeFn = Self.writeFn else { return false }
-        let data = NSData(bytes: bytes, length: bytes.count)
-        let result = writeFn(service, DDCProtocol.slaveAddress, 0x51, data, UInt32(bytes.count))
+        let result = bytes.withUnsafeBytes { rawBuffer -> IOReturn in
+            guard let baseAddress = rawBuffer.baseAddress else { return kIOReturnError }
+            return writeFn(service, DDCProtocol.slaveAddress, 0x51, baseAddress, UInt32(bytes.count))
+        }
         return result == kIOReturnSuccess
     }
 
@@ -104,10 +106,13 @@ final class AppleSiliconDDCTransport: DDCTransport {
     func writeAndRead(_ bytes: [UInt8], replyLength: Int) -> [UInt8]? {
         guard write(bytes), let readFn = Self.readFn else { return nil }
         Thread.sleep(forTimeInterval: 0.05)
-        let buffer = NSMutableData(length: replyLength) ?? NSMutableData()
-        let result = readFn(service, DDCProtocol.slaveAddress, 0x51, buffer, UInt32(replyLength))
+        var buffer = [UInt8](repeating: 0, count: replyLength)
+        let result = buffer.withUnsafeMutableBytes { rawBuffer -> IOReturn in
+            guard let baseAddress = rawBuffer.baseAddress else { return kIOReturnError }
+            return readFn(service, DDCProtocol.slaveAddress, 0x51, baseAddress, UInt32(replyLength))
+        }
         guard result == kIOReturnSuccess else { return nil }
-        return [UInt8](buffer as Data)
+        return buffer
     }
 }
 
