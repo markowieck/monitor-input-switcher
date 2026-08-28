@@ -56,23 +56,34 @@ final class AppleSiliconDDCTransport: DDCTransport {
 
         var iterator: io_iterator_t = 0
         guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("DCPAVServiceProxy"), &iterator) == kIOReturnSuccess else {
+            NSLogError("AppleSiliconDDC: IOServiceGetMatchingServices(DCPAVServiceProxy) failed")
             return []
         }
         defer { IOObjectRelease(iterator) }
 
         var ioService = IOIteratorNext(iterator)
+        var index = 0
         while ioService != 0 {
             defer {
                 IOObjectRelease(ioService)
                 ioService = IOIteratorNext(iterator)
             }
+            index += 1
 
-            guard ioRegistryString(ioService, "Location") == "External" else { continue }
-            guard let unmanaged = createWithServiceFn(nil, ioService) else { continue }
+            let location = ioRegistryString(ioService, "Location")
+            let (vendor, product) = productAttributes(ioService)
+            guard location == "External" else {
+                NSLogInfo("AppleSiliconDDC: service #\(index) skipped, Location=\(location ?? "nil") vendor=\(vendor) product=\(product)")
+                continue
+            }
+            guard let unmanaged = createWithServiceFn(nil, ioService) else {
+                NSLogError("AppleSiliconDDC: service #\(index) IOAVServiceCreateWithService failed, Location=\(location ?? "nil")")
+                continue
+            }
             let avService = unmanaged.takeRetainedValue()
 
-            let (vendor, product) = productAttributes(ioService)
             let name = "External Display" + (vendor != 0 ? " (vendor \(vendor))" : "")
+            NSLogInfo("AppleSiliconDDC: service #\(index) accepted as \(name), Location=\(location ?? "nil") vendor=\(vendor) product=\(product)")
             result.append((AppleSiliconDDCTransport(displayName: name, service: avService), vendor, product))
         }
 
@@ -96,6 +107,7 @@ final class AppleSiliconDDCTransport: DDCTransport {
             guard let baseAddress = rawBuffer.baseAddress else { return kIOReturnError }
             return writeFn(service, DDCProtocol.slaveAddress, 0x51, baseAddress, UInt32(bytes.count))
         }
+        NSLogInfo("AppleSiliconDDC: write bytes=\(bytes.map { String(format: "%02X", $0) }.joined(separator: " ")) ioReturn=\(result)")
         return result == kIOReturnSuccess
     }
 
@@ -111,7 +123,12 @@ final class AppleSiliconDDCTransport: DDCTransport {
             guard let baseAddress = rawBuffer.baseAddress else { return kIOReturnError }
             return readFn(service, DDCProtocol.slaveAddress, 0x51, baseAddress, UInt32(replyLength))
         }
-        guard result == kIOReturnSuccess else { return nil }
+        let hex = buffer.map { String(format: "%02X", $0) }.joined(separator: " ")
+        guard result == kIOReturnSuccess else {
+            NSLogError("AppleSiliconDDC: read failed ioReturn=\(result) partialBytes=\(hex)")
+            return nil
+        }
+        NSLogInfo("AppleSiliconDDC: read ioReturn=\(result) bytes=\(hex)")
         return buffer
     }
 }
