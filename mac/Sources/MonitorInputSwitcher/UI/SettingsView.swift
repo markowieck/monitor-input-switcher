@@ -179,17 +179,14 @@ private struct InputMappingRows: View {
 
             ForEach($inputs) { $input in
                 HStack(spacing: 10) {
-                    TextField("", text: $input.name)
-                        .textFieldStyle(.roundedBorder)
-                        .multilineTextAlignment(.leading)
+                    LeftAlignedTextField(text: $input.name)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    TextField("", text: $input.mqttValue)
-                        .textFieldStyle(.roundedBorder)
-                        .multilineTextAlignment(.leading)
+                    LeftAlignedTextField(text: $input.mqttValue)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    TextField("", value: $input.vcpValue, formatter: NumberFormatter())
-                        .textFieldStyle(.roundedBorder)
-                        .multilineTextAlignment(.leading)
+                    LeftAlignedTextField(text: Binding(
+                        get: { String(input.vcpValue) },
+                        set: { input.vcpValue = Int($0.filter(\.isNumber)) ?? 0 }
+                    ))
                         .frame(width: Layout.inputVCPWidth, alignment: .leading)
                     Button(role: .destructive) {
                         inputs.removeAll { $0.id == input.id }
@@ -203,5 +200,66 @@ private struct InputMappingRows: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// SwiftUI's `TextField` on macOS ignores `.multilineTextAlignment(.leading)`
+/// when styled with `.roundedBorder` inside a `Form` - the underlying
+/// `NSTextField` keeps rendering its content trailing-aligned regardless.
+/// A plain `NSTextField` sidesteps that, but its native bezel draws a
+/// visibly lighter fill than `.roundedBorder`'s outline-only look - so the
+/// chrome (border/corner radius) is drawn here in SwiftUI to match the rest
+/// of the form exactly, with the `NSTextField` underneath left completely
+/// unstyled (no bezel, no fill) and used only for text input and alignment.
+private struct LeftAlignedTextField: View {
+    @Binding var text: String
+
+    var body: some View {
+        LeftAlignedTextFieldRepresentable(text: $text)
+            .padding(.horizontal, 7)
+            .frame(height: 22)
+            .overlay(
+                RoundedRectangle(cornerRadius: 5.5)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+            )
+    }
+}
+
+private struct LeftAlignedTextFieldRepresentable: NSViewRepresentable {
+    @Binding var text: String
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.isBordered = false
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.alignment = .left
+        field.delegate = context.coordinator
+        return field
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+        nsView.alignment = .left
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        let text: Binding<String>
+
+        init(text: Binding<String>) {
+            self.text = text
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            text.wrappedValue = field.stringValue
+        }
     }
 }
