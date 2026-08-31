@@ -123,7 +123,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 item.target = self
                 item.representedObject = input
                 item.state = (currentVCPValue == input.vcpValue) ? .on : .off
-                item.image = NSImage(systemSymbolName: Self.iconName(for: input), accessibilityDescription: nil)
+                item.image = Self.symbolImage(Self.iconName(for: input))
                 menu.addItem(item)
             }
         }
@@ -132,20 +132,32 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         let refreshItem = NSMenuItem(title: "Refresh Current Input", action: #selector(refreshCurrent), keyEquivalent: "r")
         refreshItem.target = self
-        refreshItem.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
+        refreshItem.image = Self.symbolImage("arrow.clockwise")
         menu.addItem(refreshItem)
         self.refreshItem = refreshItem
 
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
+        settingsItem.image = Self.symbolImage("gearshape")
         menu.addItem(settingsItem)
 
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "Quit Monitor Input Switcher", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
-        quitItem.image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)
+        quitItem.image = Self.symbolImage("power")
         menu.addItem(quitItem)
+    }
+
+    /// SF Symbols differ in native glyph size/canvas, which otherwise
+    /// makes NSMenuItem row-height and layout inconsistent depending on
+    /// which symbol an item happens to use (most noticeable as stray
+    /// padding around whichever item is last). Pin every menu icon to the
+    /// same point size so all rows measure the same way.
+    private static func symbolImage(_ name: String) -> NSImage? {
+        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+        return NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
     }
 
     /// Inputs are free-form user config (name/mqttValue), not a fixed
