@@ -123,6 +123,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 item.target = self
                 item.representedObject = input
                 item.state = (currentVCPValue == input.vcpValue) ? .on : .off
+                item.image = NSImage(systemSymbolName: Self.iconName(for: input), accessibilityDescription: nil)
                 menu.addItem(item)
             }
         }
@@ -143,7 +144,27 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         let quitItem = NSMenuItem(title: "Quit Monitor Input Switcher", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
+        quitItem.image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)
         menu.addItem(quitItem)
+    }
+
+    /// Inputs are free-form user config (name/mqttValue), not a fixed
+    /// enum, so there's no exact "HDMI"/"DisplayPort" glyph to key off of
+    /// - this just pattern-matches common port names to the closest
+    /// available SF Symbol, falling back to a generic cable icon.
+    private static func iconName(for input: InputMapping) -> String {
+        let haystack = "\(input.name) \(input.mqttValue)".lowercased()
+        if haystack.contains("hdmi") {
+            return "tv"
+        }
+        if haystack.contains("displayport") || haystack.contains("display port")
+            || haystack.range(of: "\\bdp\\b", options: .regularExpression) != nil {
+            return "display"
+        }
+        if haystack.contains("usb") || haystack.contains("thunderbolt") {
+            return "cable.connector"
+        }
+        return "cable.connector.horizontal"
     }
 
     @objc private func selectInput(_ sender: NSMenuItem) {
