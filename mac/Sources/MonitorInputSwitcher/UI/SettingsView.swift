@@ -56,21 +56,46 @@ struct SettingsView: View {
                 Text("MQTT Broker")
             }
 
-            Section {
-                InputMappingRows(inputs: $store.settings.inputs)
+            ForEach($store.settings.monitors) { $monitor in
+                Section {
+                    FormRow("Monitor") {
+                        PlainTextField(text: $monitor.name)
+                    }
 
-                Button {
-                    store.settings.inputs.append(InputMapping(name: "New Input", mqttValue: "", vcpValue: 0))
-                } label: {
-                    Label("Add Input", systemImage: "plus.circle.fill")
+                    InputMappingRows(inputs: $monitor.inputs)
+
+                    HStack {
+                        Button {
+                            monitor.inputs.append(InputMapping(name: "New Input", mqttValue: "", vcpValue: 0))
+                        } label: {
+                            Label("Add Input", systemImage: "plus.circle.fill")
+                        }
+                        .buttonStyle(.borderless)
+
+                        Spacer()
+
+                        // Removes this monitor's whole configuration - for
+                        // one that's been permanently disconnected/sold.
+                        // A monitor that's just temporarily unplugged
+                        // shouldn't be removed here: it keeps its config
+                        // (and VCP mappings) and gets matched again the
+                        // next time it's detected.
+                        Button(role: .destructive) {
+                            store.settings.monitors.removeAll { $0.id == monitor.id }
+                        } label: {
+                            Label("Remove Monitor", systemImage: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                } header: {
+                    Text(monitor.name.isEmpty ? "Monitor" : monitor.name)
+                } footer: {
+                    if store.settings.monitors.first?.id == monitor.id {
+                        Text("Map incoming MQTT payload values to a DDC/CI input-source (VCP 0x60) value. These also appear in the menu bar dropdown, with each monitor's current input highlighted. VCP values for the same port can differ between monitor models.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                .buttonStyle(.borderless)
-            } header: {
-                Text("Inputs")
-            } footer: {
-                Text("Map incoming MQTT payload values to a DDC/CI input-source (VCP 0x60) value. These also appear in the menu bar dropdown, with the monitor's current input highlighted.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             Section {

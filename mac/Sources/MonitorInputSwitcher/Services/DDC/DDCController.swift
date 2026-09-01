@@ -1,57 +1,56 @@
 import Foundation
 
 /// High level DDC/CI facade used by the rest of the app: switch input,
-/// read back the current input. Talks to the first external display it
-/// can find a transport for (the common single-external-monitor setup).
+/// read back the current input. Talks to every controllable external
+/// display it can find a transport for.
 final class DDCController {
-    private var transport: DDCTransport?
+    /// All currently validated transports, one per controllable external
+    /// display. AppDelegate matches these to `MonitorConfig`s by
+    /// `displayName` (see `MonitorConfig.transportKey`).
+    private(set) var transports: [DDCTransport] = []
 
-    /// Re-scans for a controllable external display. Call this at
-    /// startup and whenever a write/read fails, in case the monitor was
+    /// Re-scans for controllable external displays. Call this at startup
+    /// and whenever a write/read fails, in case a monitor was
     /// unplugged/replugged or woke from sleep.
     ///
     /// A Mac can expose several I2C-capable transports (e.g. one
     /// framebuffer per GPU output port, whether or not a real DDC/CI
     /// monitor is actually attached there), and the OS API happily
     /// reports success for all of them even when nothing real is on the
-    /// other end. To find the one that's actually the monitor, probe
-    /// each candidate with a real "Get VCP Feature" request and pick the
-    /// first one that returns a structurally valid reply.
+    /// other end. To find the ones that are actually monitors, probe each
+    /// candidate with a real "Get VCP Feature" request and keep only the
+    /// ones that return a structurally valid reply.
     @discardableResult
-    func refreshTransport() -> DDCTransport? {
-        let transports = DDCTransportFactory.makeTransports()
-        NSLogInfo("refreshTransport: probing \(transports.count) candidate transport(s)")
+    func refreshTransports() -> [DDCTransport] {
+        let candidates = DDCTransportFactory.makeTransports()
+        NSLogInfo("refreshTransports: probing \(candidates.count) candidate transport(s)")
 
         let request = DDCProtocol.getVCPRequestPacket(vcpCode: DDCProtocol.inputSourceVCPCode)
-        for candidate in transports {
+        var validated: [DDCTransport] = []
+        for candidate in candidates {
             guard Self.getVCPReplyWithRetries(transport: candidate, request: request) != nil else {
                 continue
             }
-            NSLogInfo("refreshTransport: \(candidate.displayName) responded with a valid DDC/CI reply, using it")
-            transport = candidate
-            return candidate
+            NSLogInfo("refreshTransports: \(candidate.displayName) responded with a valid DDC/CI reply, using it")
+            validated.append(candidate)
         }
 
-        // None of the candidates validated - this can happen when the
-        // monitor is just temporarily busy. Guessing at an unvalidated
-        // candidate here has been observed to silently pick the wrong
-        // one (writes "succeed" against a port with nothing attached),
-        // so keep whatever was previously validated rather than
-        // downgrading to a guess. Only guess if we've never had a
-        // working transport at all.
-        if let transport {
-            NSLogError("refreshTransport: no transport validated this time; keeping the previously validated \(transport.displayName)")
-            return transport
+        guard validated.isEmpty else {
+            transports = validated
+            return validated
         }
 
-        NSLogError("refreshTransport: no transport returned a valid DDC/CI reply; falling back to the first candidate")
-        transport = transports.first
-        if let transport {
-            NSLogInfo("Using DDC transport for \(transport.displayName) (unvalidated)")
-        } else {
-            NSLogError("No controllable external display found")
+        // None of the candidates validated this time - this can happen
+        // when a monitor is just temporarily busy. Keep whatever was
+        // previously validated rather than dropping every monitor from
+        // the menu/settings over a transient hiccup.
+        if !transports.isEmpty {
+            NSLogError("refreshTransports: no transport validated this time; keeping the \(transports.count) previously validated transport(s)")
+            return transports
         }
-        return transport
+
+        NSLogError("refreshTransports: no transport returned a valid DDC/CI reply")
+        return transports
     }
 
     /// DDC/CI monitors are notoriously flaky about responding to any
@@ -71,11 +70,8 @@ final class DDCController {
         return nil
     }
 
-    var currentDisplayName: String? { transport?.displayName }
-
     @discardableResult
-    func setInput(vcpValue: Int) -> Bool {
-        guard let transport = transport ?? refreshTransport() else { return false }
+    func setInput(on transport: DDCTransport, vcpValue: Int) -> Bool {
         let packet = DDCProtocol.setVCPPacket(vcpCode: DDCProtocol.inputSourceVCPCode, value: UInt16(clamping: vcpValue))
 
         // Switching away from this Mac's own input to a source with
@@ -92,18 +88,14 @@ final class DDCController {
             if attempt < 3 { Thread.sleep(forTimeInterval: 0.3) }
         }
 
-        NSLogError("Failed to write VCP input source \(vcpValue) after retries, rescanning for a different transport")
-        guard let retried = refreshTransport() else { return false }
-        retried.write(DDCProtocol.powerOnPacket())
-        Thread.sleep(forTimeInterval: 0.3)
-        return retried.write(packet)
+        NSLogError("Failed to write VCP input source \(vcpValue) to \(transport.displayName) after retries")
+        return false
     }
 
     /// Reads back an arbitrary VCP feature (current, max), unmasked. Handy
     /// for diagnostics, e.g. checking VCP 0xD6 (Power Mode) to see
     /// whether the monitor reports itself as on/standby/suspended.
-    func getVCPValue(code: UInt8) -> (current: Int, max: Int)? {
-        guard let transport = transport ?? refreshTransport() else { return nil }
+    func getVCPValue(from transport: DDCTransport, code: UInt8) -> (current: Int, max: Int)? {
         let request = DDCProtocol.getVCPRequestPacket(vcpCode: code)
         guard let parsed = Self.getVCPReplyWithRetries(transport: transport, request: request) else {
             NSLogError("getVCPValue(0x\(String(code, radix: 16))): no valid reply from \(transport.displayName)")
@@ -112,14 +104,8 @@ final class DDCController {
         return (Int(parsed.currentValue), Int(parsed.maxValue))
     }
 
-    /// Reads back the monitor's current input source VCP value. Keeps
-    /// using the already-validated cached transport rather than
-    /// rescanning on every transient failure - rescanning re-probes every
-    /// candidate transport, which is itself extra DDC/CI bus traffic and
-    /// was observed to make a temporarily-busy monitor even less
-    /// responsive rather than more.
-    func getCurrentInput() -> Int? {
-        guard let transport = transport ?? refreshTransport() else { return nil }
+    /// Reads back a monitor's current input source VCP value.
+    func getCurrentInput(from transport: DDCTransport) -> Int? {
         let request = DDCProtocol.getVCPRequestPacket(vcpCode: DDCProtocol.inputSourceVCPCode)
         guard let parsed = Self.getVCPReplyWithRetries(transport: transport, request: request) else {
             NSLogError("getCurrentInput: no valid reply from \(transport.displayName)")

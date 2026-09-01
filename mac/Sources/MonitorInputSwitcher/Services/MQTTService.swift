@@ -3,28 +3,28 @@ import MQTTNIO
 import NIOCore
 import NIOPosix
 
-/// Connects to the configured MQTT broker, subscribes to the command
-/// topic (`<topic>/set`) and forwards the (string) payload of every
-/// message on it via `onValue`, and publishes the current input to the
-/// state topic (`<topic>`, retained) via `publish(_:)`. This follows the
-/// Home Assistant MQTT convention (base topic = state, `/set` = command).
-/// Handles reconnects with simple backoff.
+/// Connects to the configured MQTT broker. Subscribes to a set of
+/// per-monitor command topics and forwards `(commandTopic, value)` of
+/// every message received on one of them via `onValue`; publishes
+/// retained state and Home Assistant Discovery configs to explicit
+/// topics via `publish`/`publishDiscovery`. Handles reconnects with
+/// simple backoff.
 final class MQTTService {
-    var onValue: ((String) -> Void)?
+    var onValue: ((_ commandTopic: String, _ value: String) -> Void)?
     var onConnectionStateChanged: ((Bool) -> Void)?
 
     private var client: MQTTClient?
     private let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
-    private var currentStateTopic: String = ""
-    private var currentCommandTopic: String = ""
+    private var subscribedCommandTopics: Set<String> = []
     private var reconnectWorkItem: DispatchWorkItem?
     private var reconnectDelay: TimeInterval = 2
     private var shouldStayConnected = false
 
-    func start(settings: Settings, password: String) {
+    func start(settings: Settings, password: String, commandTopics: [String] = []) {
         stop()
         shouldStayConnected = true
         reconnectDelay = 2
+        subscribedCommandTopics = Set(commandTopics)
         connect(settings: settings, password: password)
     }
 
@@ -40,8 +40,6 @@ final class MQTTService {
 
     private func connect(settings: Settings, password: String) {
         guard !settings.mqttHost.isEmpty else { return }
-        currentStateTopic = settings.mqttTopic
-        currentCommandTopic = settings.mqttTopic + "/set"
 
         // MQTTClient requires an explicit shutdown before it's deallocated
         // (it traps in deinit otherwise) - never just overwrite `client`.
@@ -68,12 +66,13 @@ final class MQTTService {
             guard let self else { return }
             switch result {
             case .success(let publish):
-                guard publish.topicName == self.currentCommandTopic else { return }
+                guard self.subscribedCommandTopics.contains(publish.topicName) else { return }
                 var buffer = publish.payload
                 let value = buffer.readString(length: buffer.readableBytes) ?? ""
                 let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                let topic = publish.topicName
                 DispatchQueue.main.async {
-                    self.onValue?(trimmed)
+                    self.onValue?(topic, trimmed)
                 }
             case .failure(let error):
                 NSLogError("MQTT publish listener error: \(error)")
@@ -87,8 +86,11 @@ final class MQTTService {
                 NSLogInfo("MQTT connected to \(settings.mqttHost):\(settings.mqttPort)")
                 self.reconnectDelay = 2
                 DispatchQueue.main.async { self.onConnectionStateChanged?(true) }
-                newClient.subscribe(to: [MQTTSubscribeInfo(topicFilter: self.currentCommandTopic, qos: .atLeastOnce)])
-                    .whenFailure { error in NSLogError("MQTT subscribe failed: \(error)") }
+                if !self.subscribedCommandTopics.isEmpty {
+                    let subscriptions = self.subscribedCommandTopics.map { MQTTSubscribeInfo(topicFilter: $0, qos: .atLeastOnce) }
+                    newClient.subscribe(to: subscriptions)
+                        .whenFailure { error in NSLogError("MQTT subscribe failed: \(error)") }
+                }
             case .failure(let error):
                 NSLogError("MQTT connect failed: \(error)")
                 DispatchQueue.main.async { self.onConnectionStateChanged?(false) }
@@ -97,27 +99,35 @@ final class MQTTService {
         }
     }
 
-    /// Publishes the given value (retained) to the state topic, so other
-    /// MQTT clients (e.g. Home Assistant) see the current input even when
-    /// it was changed locally - from the menu, or detected on a poll.
-    func publish(_ value: String) {
-        guard !currentStateTopic.isEmpty else { return }
-        publish(topic: currentStateTopic, payload: ByteBuffer(string: value), retain: true)
+    /// Publishes the given value (retained) to an explicit state topic,
+    /// so other MQTT clients (e.g. Home Assistant) see a monitor's
+    /// current input even when it was changed locally - from the menu,
+    /// or detected on a poll.
+    func publish(topic: String, value: String) {
+        publish(topic: topic, payload: ByteBuffer(string: value), retain: true)
     }
 
     /// Publishes a Home Assistant MQTT Discovery config for a `select`
-    /// entity wired to this instance's state/command topics, so the
-    /// input shows up in Home Assistant automatically - no manual YAML
-    /// needed on the HA side. Retained, so HA (or its MQTT broker)
-    /// picks it up whenever it (re)connects, not just at publish time.
-    func publishDiscovery(uniqueId: String, name: String, deviceName: String, appVersion: String, options: [String]) {
-        guard !currentStateTopic.isEmpty, !currentCommandTopic.isEmpty, !options.isEmpty else { return }
+    /// entity wired to the given state/command topics, so the input
+    /// shows up in Home Assistant automatically - no manual YAML needed
+    /// on the HA side. Retained, so HA (or its MQTT broker) picks it up
+    /// whenever it (re)connects, not just at publish time.
+    func publishDiscovery(
+        uniqueId: String,
+        name: String,
+        deviceName: String,
+        appVersion: String,
+        stateTopic: String,
+        commandTopic: String,
+        options: [String]
+    ) {
+        guard !options.isEmpty else { return }
         let configPayload: [String: Any] = [
             "name": name,
             "unique_id": uniqueId,
             "object_id": uniqueId,
-            "state_topic": currentStateTopic,
-            "command_topic": currentCommandTopic,
+            "state_topic": stateTopic,
+            "command_topic": commandTopic,
             "options": options,
             "device": [
                 "identifiers": [uniqueId],

@@ -2,8 +2,8 @@ import AppKit
 import Combine
 
 /// Owns the NSStatusItem and its dropdown menu: lists the configured
-/// inputs (checkmarking the one currently active on the monitor),
-/// exposes MQTT connection state, and the Settings/Quit actions.
+/// inputs per monitor (checkmarking each monitor's currently active
+/// one), exposes MQTT connection state, and the Settings/Quit actions.
 final class StatusBarController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private let settingsStore: SettingsStore
@@ -17,9 +17,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private var spinnerWorkItem: DispatchWorkItem?
 
     private var mqttConnected = false
-    private var currentVCPValue: Int?
+    private var currentVCPValues: [UUID: Int] = [:]
 
-    var onSelectInput: ((InputMapping) -> Void)?
+    var onSelectInput: ((MonitorConfig, InputMapping) -> Void)?
     var onOpenSettings: (() -> Void)?
     var onQuit: (() -> Void)?
     var onRefreshCurrentInput: (() -> Void)?
@@ -50,16 +50,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         rebuildMenu()
     }
 
-    func setCurrentVCPValue(_ value: Int?) {
-        currentVCPValue = value
+    func setCurrentVCPValue(_ value: Int?, for monitorID: UUID) {
+        currentVCPValues[monitorID] = value
         stopSpinner()
         rebuildMenu()
     }
 
-    /// Query the current input as soon as the menu is opened, so a stale
-    /// checkmark (e.g. left over from switching inputs elsewhere) doesn't
-    /// linger. If the DDC round-trip takes a moment, show a small spinner
-    /// on the refresh item instead of the static icon.
+    /// Query every monitor's current input as soon as the menu is opened,
+    /// so a stale checkmark (e.g. left over from switching inputs
+    /// elsewhere) doesn't linger. If the DDC round-trip takes a moment,
+    /// show a small spinner on the refresh item instead of the static
+    /// icon.
     func menuWillOpen(_ menu: NSMenu) {
         let workItem = DispatchWorkItem { [weak self] in self?.startSpinner() }
         spinnerWorkItem = workItem
@@ -112,19 +113,41 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(statusLine)
         menu.addItem(.separator())
 
-        let inputs = settingsStore.settings.inputs
-        if inputs.isEmpty {
-            let item = NSMenuItem(title: "No inputs configured", action: nil, keyEquivalent: "")
+        let monitors = settingsStore.settings.monitors
+        // A monitor-name header only earns its place once there's more
+        // than one monitor to tell apart - for the common single-monitor
+        // case it'd just be redundant chrome above the same input list.
+        let showMonitorHeaders = monitors.count > 1
+
+        if monitors.isEmpty {
+            let item = NSMenuItem(title: "No monitors configured", action: nil, keyEquivalent: "")
             item.isEnabled = false
             menu.addItem(item)
         } else {
-            for input in inputs {
-                let item = NSMenuItem(title: input.name, action: #selector(selectInput(_:)), keyEquivalent: "")
-                item.target = self
-                item.representedObject = input
-                item.state = (currentVCPValue == input.vcpValue) ? .on : .off
-                item.image = Self.symbolImage(Self.iconName(for: input))
-                menu.addItem(item)
+            for (index, monitor) in monitors.enumerated() {
+                if showMonitorHeaders {
+                    if index > 0 { menu.addItem(.separator()) }
+                    let header = NSMenuItem(title: monitor.name, action: nil, keyEquivalent: "")
+                    header.isEnabled = false
+                    menu.addItem(header)
+                }
+
+                if monitor.inputs.isEmpty {
+                    let item = NSMenuItem(title: "No inputs configured", action: nil, keyEquivalent: "")
+                    item.isEnabled = false
+                    menu.addItem(item)
+                    continue
+                }
+
+                let currentVCPValue = currentVCPValues[monitor.id]
+                for input in monitor.inputs {
+                    let item = NSMenuItem(title: input.name, action: #selector(selectInput(_:)), keyEquivalent: "")
+                    item.target = self
+                    item.representedObject = SelectedInput(monitor: monitor, input: input)
+                    item.state = (currentVCPValue == input.vcpValue) ? .on : .off
+                    item.image = Self.symbolImage(Self.iconName(for: input))
+                    menu.addItem(item)
+                }
             }
         }
 
@@ -180,8 +203,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func selectInput(_ sender: NSMenuItem) {
-        guard let input = sender.representedObject as? InputMapping else { return }
-        onSelectInput?(input)
+        guard let selected = sender.representedObject as? SelectedInput else { return }
+        onSelectInput?(selected.monitor, selected.input)
     }
 
     @objc private func refreshCurrent() {
@@ -194,5 +217,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func quit() {
         onQuit?()
+    }
+}
+
+/// `NSMenuItem.representedObject` needs a single object; this bundles the
+/// monitor an input row belongs to together with the input itself.
+private final class SelectedInput: NSObject {
+    let monitor: MonitorConfig
+    let input: InputMapping
+
+    init(monitor: MonitorConfig, input: InputMapping) {
+        self.monitor = monitor
+        self.input = input
     }
 }
