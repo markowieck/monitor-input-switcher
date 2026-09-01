@@ -1,26 +1,104 @@
 import SwiftUI
 
-/// Fixed column widths used throughout the form so every row - text
-/// fields, toggles, buttons, table columns - lines up exactly. SwiftUI's
-/// `Grid` sizes each column from its cells' *ideal* size, which for a
-/// `TextField` is effectively "as much as it can get"; mixed with rows of
-/// different content that produced visibly inconsistent widths. Using the
-/// same explicit width on every corresponding cell sidesteps that
-/// entirely - there's no auto-sizing left to disagree.
+/// Fixed column widths used throughout the detail forms so every row -
+/// text fields, toggles, buttons, table columns - lines up exactly.
+/// SwiftUI's `Grid` sizes each column from its cells' *ideal* size, which
+/// for a `TextField` is effectively "as much as it can get"; mixed with
+/// rows of different content that produced visibly inconsistent widths.
+/// Using the same explicit width on every corresponding cell sidesteps
+/// that entirely - there's no auto-sizing left to disagree.
 private enum Layout {
     static let labelWidth: CGFloat = 90
     static let inputVCPWidth: CGFloat = 70
     static let deleteButtonWidth: CGFloat = 20
 }
 
+/// Which sidebar row is showing in the detail pane. A monitor is
+/// addressed by id, not index, so a row that gets removed from
+/// `settings.monitors` (via "Remove Monitor") cleanly falls out of
+/// `List(selection:)` instead of pointing at a stale/renumbered index.
+private enum SettingsSection: Hashable {
+    case mqtt
+    case general
+    case monitor(UUID)
+}
+
+/// A macOS System Settings / BetterDisplay-style sidebar + detail layout:
+/// the sidebar lists MQTT Broker, General, and one row per configured
+/// monitor, so the list of monitors can keep growing without every
+/// monitor's whole input table being stacked into one long scroll (the
+/// previous single-`Form` layout).
 struct SettingsView: View {
     @ObservedObject var store: SettingsStore
     var onTestConnection: () -> Void
     var onManualRefreshInput: () -> Void
 
+    @State private var selection: SettingsSection? = .general
+
     var body: some View {
-        Form {
-            Section {
+        NavigationSplitView {
+            List(selection: $selection) {
+                Label("General", systemImage: "gearshape")
+                    .tag(SettingsSection.general)
+                Label("MQTT", systemImage: "network")
+                    .tag(SettingsSection.mqtt)
+
+                Section("Monitors") {
+                    ForEach(store.settings.monitors) { monitor in
+                        Label(monitor.name.isEmpty ? "Monitor" : monitor.name, systemImage: "display")
+                            .tag(SettingsSection.monitor(monitor.id))
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 170, ideal: 190)
+        } detail: {
+            ScrollView {
+                detailView
+                    .padding(24)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .navigationSplitViewStyle(.balanced)
+        .frame(width: 720, height: 480)
+        // If the selected monitor gets removed (via "Remove Monitor"),
+        // fall back to a section that's guaranteed to still exist rather
+        // than showing an empty detail pane for a dangling selection.
+        .onChange(of: store.settings.monitors.map(\.id)) { ids in
+            if case .monitor(let id) = selection, !ids.contains(id) {
+                selection = .mqtt
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var detailView: some View {
+        switch selection {
+        case .mqtt, .none:
+            MQTTBrokerSettings(store: store, onTestConnection: onTestConnection)
+        case .general:
+            GeneralSettings(store: store, onManualRefreshInput: onManualRefreshInput)
+        case .monitor(let id):
+            if let index = store.settings.monitors.firstIndex(where: { $0.id == id }) {
+                MonitorSettings(
+                    monitor: $store.settings.monitors[index],
+                    onRemove: { store.settings.monitors.remove(at: index) }
+                )
+            }
+        }
+    }
+}
+
+private struct MQTTBrokerSettings: View {
+    @ObservedObject var store: SettingsStore
+    var onTestConnection: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("MQTT")
+                .font(.title2.bold())
+
+            VStack(spacing: 10) {
                 FormRow("Server") {
                     PlainTextField(text: $store.settings.mqttHost, placeholder: "mqtt.example.com")
                 }
@@ -41,7 +119,7 @@ struct SettingsView: View {
                     PlainTextField(text: $store.settings.mqttTopic, placeholder: "home/monitor/input")
                 }
                 FormRow("") {
-                    Text("State is published (retained) on this topic; commands are read from \"<topic>/set\".")
+                    Text("State is published (retained) on this topic; commands are read from \"<topic>/set\". With more than one monitor, each gets its own \"<topic>/<id>\" pair instead.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -52,53 +130,21 @@ struct SettingsView: View {
                         Button("Test Connection") { onTestConnection() }
                     }
                 }
-            } header: {
-                Text("MQTT Broker")
             }
+        }
+    }
+}
 
-            ForEach($store.settings.monitors) { $monitor in
-                Section {
-                    FormRow("Monitor") {
-                        PlainTextField(text: $monitor.name)
-                    }
+private struct GeneralSettings: View {
+    @ObservedObject var store: SettingsStore
+    var onManualRefreshInput: () -> Void
 
-                    InputMappingRows(inputs: $monitor.inputs)
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("General")
+                .font(.title2.bold())
 
-                    HStack {
-                        Button {
-                            monitor.inputs.append(InputMapping(name: "New Input", mqttValue: "", vcpValue: 0))
-                        } label: {
-                            Label("Add Input", systemImage: "plus.circle.fill")
-                        }
-                        .buttonStyle(.borderless)
-
-                        Spacer()
-
-                        // Removes this monitor's whole configuration - for
-                        // one that's been permanently disconnected/sold.
-                        // A monitor that's just temporarily unplugged
-                        // shouldn't be removed here: it keeps its config
-                        // (and VCP mappings) and gets matched again the
-                        // next time it's detected.
-                        Button(role: .destructive) {
-                            store.settings.monitors.removeAll { $0.id == monitor.id }
-                        } label: {
-                            Label("Remove Monitor", systemImage: "trash")
-                        }
-                        .buttonStyle(.borderless)
-                    }
-                } header: {
-                    Text(monitor.name.isEmpty ? "Monitor" : monitor.name)
-                } footer: {
-                    if store.settings.monitors.first?.id == monitor.id {
-                        Text("Map incoming MQTT payload values to a DDC/CI input-source (VCP 0x60) value. These also appear in the menu bar dropdown, with each monitor's current input highlighted. VCP values for the same port can differ between monitor models.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-
-            Section {
+            VStack(spacing: 10) {
                 ToggleRow(label: "Start at Login", isOn: Binding(
                     get: { store.settings.launchAtLogin },
                     set: { newValue in
@@ -112,18 +158,57 @@ struct SettingsView: View {
                         Button("Refresh Now") { onManualRefreshInput() }
                     }
                 }
-            } header: {
-                Text("General")
             }
         }
-        .formStyle(.grouped)
-        .frame(width: 560, height: 720)
+    }
+}
+
+private struct MonitorSettings: View {
+    @Binding var monitor: MonitorConfig
+    var onRemove: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(monitor.name.isEmpty ? "Monitor" : monitor.name)
+                .font(.title2.bold())
+
+            FormRow("Name") {
+                PlainTextField(text: $monitor.name)
+            }
+
+            InputMappingRows(inputs: $monitor.inputs)
+
+            HStack {
+                Button {
+                    monitor.inputs.append(InputMapping(name: "New Input", mqttValue: "", vcpValue: 0))
+                } label: {
+                    Label("Add Input", systemImage: "plus.circle.fill")
+                }
+                .buttonStyle(.borderless)
+
+                Spacer()
+
+                // Removes this monitor's whole configuration - for one
+                // that's been permanently disconnected/sold. A monitor
+                // that's just temporarily unplugged shouldn't be removed
+                // here: it keeps its config (and VCP mappings) and gets
+                // matched again the next time it's detected.
+                Button(role: .destructive, action: onRemove) {
+                    Label("Remove Monitor", systemImage: "trash")
+                }
+                .buttonStyle(.borderless)
+            }
+
+            Text("Map incoming MQTT payload values to a DDC/CI input-source (VCP 0x60) value. These also appear in the menu bar dropdown, with each monitor's current input highlighted. VCP values for the same port can differ between monitor models.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 
 /// A single settings row: a fixed-width, trailing-aligned label followed
 /// by content that fills the rest of the row's width. Every row - across
-/// every section - uses the exact same `Layout.labelWidth`, so all the
+/// every detail pane - uses the exact same `Layout.labelWidth`, so all the
 /// label text lines up on one edge and all the fields/controls line up on
 /// the other, independent of label text length or control type.
 private struct FormRow<Content: View>: View {

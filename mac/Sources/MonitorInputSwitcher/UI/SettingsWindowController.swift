@@ -8,7 +8,7 @@ final class SettingsWindowController: NSWindowController {
         let window = NSWindow(contentViewController: hosting)
         window.title = "Monitor Input Switcher Settings"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.minSize = NSSize(width: 480, height: 420)
+        window.minSize = NSSize(width: 620, height: 420)
         window.isReleasedWhenClosed = false
         self.init(window: window)
     }
