@@ -24,8 +24,9 @@ mkdir -p "$APP_DIR/Contents/Resources"
 cp "$BUILT_BINARY" "$APP_DIR/Contents/MacOS/$APP_NAME"
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
 
-echo "==> Ad-hoc signing..."
-codesign --force --deep --sign - "$APP_DIR"
+"$ROOT_DIR/Scripts/ensure_local_signing_identity.sh"
+echo "==> Signing with local identity..."
+codesign --force --deep --sign "Monitor Input Switcher Local Signing" "$APP_DIR"
 
 echo "==> Done: $APP_DIR"
 echo "    Move it to /Applications and open it, or run: open \"$APP_DIR\""
