@@ -86,7 +86,7 @@ final class AppleSiliconDDCTransport: DDCTransport {
 
             let name = productName(ioService) ?? ("External Display" + (vendor != 0 ? " (vendor \(vendor))" : ""))
             let edidIdentity = edidIdentity(ioService, vendor: vendor, product: product)
-            NSLogInfo("AppleSiliconDDC: service #\(index) accepted as \(name), Location=\(location ?? "nil") vendor=\(vendor) product=\(product)")
+            NSLogInfo("AppleSiliconDDC: service #\(index) accepted as \(name), Location=\(location ?? "nil") vendor=\(vendor) product=\(product) edidIdentity=\(edidIdentity ?? "nil")")
             result.append((AppleSiliconDDCTransport(displayName: name, edidIdentity: edidIdentity, service: avService), vendor, product))
         }
 
@@ -101,10 +101,22 @@ final class AppleSiliconDDCTransport: DDCTransport {
         return attrs["ProductAttributes"] as? [String: Any]
     }
 
+    /// IOKit surfaces these numeric fields as `NSNumber`, boxing whatever
+    /// underlying C integer width DisplayServices actually used to build
+    /// the dictionary - which isn't necessarily `UInt32` under the hood,
+    /// so a direct `as? UInt32` cast can silently fail (return nil) even
+    /// though the value is right there. Going through `NSNumber` first
+    /// sidesteps that entirely - this bit `SerialNumber` in particular on
+    /// at least one Apple Silicon Mac, while `LegacyManufacturerID`/
+    /// `ProductID` happened to cast fine.
+    private static func productAttributeUInt32(_ productAttrs: [String: Any], _ key: String) -> UInt32? {
+        (productAttrs[key] as? NSNumber)?.uint32Value
+    }
+
     private static func productAttributes(_ service: io_service_t) -> (vendor: UInt32, product: UInt32) {
         guard let productAttrs = displayProductAttributes(service) else { return (0, 0) }
-        let vendor = (productAttrs["LegacyManufacturerID"] as? UInt32) ?? 0
-        let product = (productAttrs["ProductID"] as? UInt32) ?? 0
+        let vendor = productAttributeUInt32(productAttrs, "LegacyManufacturerID") ?? 0
+        let product = productAttributeUInt32(productAttrs, "ProductID") ?? 0
         return (vendor, product)
     }
 
@@ -116,7 +128,7 @@ final class AppleSiliconDDCTransport: DDCTransport {
     private static func edidIdentity(_ service: io_service_t, vendor: UInt32, product: UInt32) -> String? {
         guard vendor != 0 || product != 0 else { return nil }
         let productAttrs = displayProductAttributes(service)
-        let serial = (productAttrs?["SerialNumber"] as? UInt32) ?? 0
+        let serial = productAttrs.flatMap { productAttributeUInt32($0, "SerialNumber") } ?? 0
         return String(format: "%04x-%04x-%08x", vendor, product, serial)
     }
 
