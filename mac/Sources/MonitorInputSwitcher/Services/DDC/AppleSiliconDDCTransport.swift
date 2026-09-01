@@ -93,12 +93,29 @@ final class AppleSiliconDDCTransport: DDCTransport {
         return result.map { $0.transport }
     }
 
+    /// "DisplayAttributes" was observed to not be populated yet on the
+    /// DCPAVServiceProxy node the first time it's read right after
+    /// discovery (vendor/product/name all empty, despite DDC/CI itself
+    /// already working fine on the same service) - so this retries with
+    /// a short wait, logging what it actually found at each step to help
+    /// diagnose if it still comes up empty after retrying.
     private static func displayProductAttributes(_ service: io_service_t) -> [String: Any]? {
-        guard let attrs = IORegistryEntryCreateCFProperty(service, "DisplayAttributes" as CFString, kCFAllocatorDefault, 0)?
-            .takeRetainedValue() as? [String: Any] else {
-            return nil
+        for attempt in 1...5 {
+            guard let attrs = IORegistryEntryCreateCFProperty(service, "DisplayAttributes" as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue() as? [String: Any] else {
+                NSLogInfo("AppleSiliconDDC: DisplayAttributes not available yet (attempt \(attempt)/5)")
+                if attempt < 5 { Thread.sleep(forTimeInterval: 0.15) }
+                continue
+            }
+            guard let productAttrs = attrs["ProductAttributes"] as? [String: Any] else {
+                NSLogInfo("AppleSiliconDDC: DisplayAttributes present but no ProductAttributes (attempt \(attempt)/5): keys=\(attrs.keys.sorted())")
+                if attempt < 5 { Thread.sleep(forTimeInterval: 0.15) }
+                continue
+            }
+            NSLogInfo("AppleSiliconDDC: ProductAttributes found (attempt \(attempt)/5): keys=\(productAttrs.keys.sorted())")
+            return productAttrs
         }
-        return attrs["ProductAttributes"] as? [String: Any]
+        return nil
     }
 
     /// IOKit surfaces these numeric fields as `NSNumber`, boxing whatever
