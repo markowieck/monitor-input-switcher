@@ -41,6 +41,11 @@ struct SettingsView: View {
                     PlainTextField(text: $store.settings.mqttTopic, placeholder: "home/monitor/input")
                 }
                 FormRow("") {
+                    Text("State is published (retained) on this topic; commands are read from \"<topic>/set\".")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                FormRow("") {
                     HStack {
                         ConnectionStatusLabel(result: store.connectionTestResult)
                         Spacer()

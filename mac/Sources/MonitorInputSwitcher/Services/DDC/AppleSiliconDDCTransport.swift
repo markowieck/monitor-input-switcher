@@ -82,7 +82,7 @@ final class AppleSiliconDDCTransport: DDCTransport {
             }
             let avService = unmanaged.takeRetainedValue()
 
-            let name = "External Display" + (vendor != 0 ? " (vendor \(vendor))" : "")
+            let name = productName(ioService) ?? ("External Display" + (vendor != 0 ? " (vendor \(vendor))" : ""))
             NSLogInfo("AppleSiliconDDC: service #\(index) accepted as \(name), Location=\(location ?? "nil") vendor=\(vendor) product=\(product)")
             result.append((AppleSiliconDDCTransport(displayName: name, service: avService), vendor, product))
         }
@@ -90,15 +90,34 @@ final class AppleSiliconDDCTransport: DDCTransport {
         return result.map { $0.transport }
     }
 
-    private static func productAttributes(_ service: io_service_t) -> (vendor: UInt32, product: UInt32) {
+    private static func displayProductAttributes(_ service: io_service_t) -> [String: Any]? {
         guard let attrs = IORegistryEntryCreateCFProperty(service, "DisplayAttributes" as CFString, kCFAllocatorDefault, 0)?
-            .takeRetainedValue() as? [String: Any],
-            let productAttrs = attrs["ProductAttributes"] as? [String: Any] else {
-            return (0, 0)
+            .takeRetainedValue() as? [String: Any] else {
+            return nil
         }
+        return attrs["ProductAttributes"] as? [String: Any]
+    }
+
+    private static func productAttributes(_ service: io_service_t) -> (vendor: UInt32, product: UInt32) {
+        guard let productAttrs = displayProductAttributes(service) else { return (0, 0) }
         let vendor = (productAttrs["LegacyManufacturerID"] as? UInt32) ?? 0
         let product = (productAttrs["ProductID"] as? UInt32) ?? 0
         return (vendor, product)
+    }
+
+    /// The monitor's real product name, as encoded in its EDID (the
+    /// "Monitor Name" descriptor block) and surfaced by the system here
+    /// as a locale-keyed dictionary, e.g. `["en_US": "LG UltraFine"]`.
+    /// Not every monitor's EDID carries one, so this can be nil.
+    private static func productName(_ service: io_service_t) -> String? {
+        guard let productAttrs = displayProductAttributes(service) else { return nil }
+        if let name = productAttrs["ProductName"] as? String {
+            return name
+        }
+        if let localized = productAttrs["ProductName"] as? [String: String] {
+            return localized["en_US"] ?? localized.values.first
+        }
+        return nil
     }
 
     /// `DDCProtocol` builds packets as `[0x51] + body + [checksum]`, framed

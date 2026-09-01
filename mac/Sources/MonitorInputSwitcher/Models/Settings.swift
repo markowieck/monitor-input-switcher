@@ -8,6 +8,8 @@ struct Settings: Codable, Equatable {
     var mqttPort: Int
     var mqttUseTLS: Bool
     var mqttUsername: String
+    /// Base MQTT topic. State is published here (retained); commands are
+    /// read from "<mqttTopic>/set" - the Home Assistant convention.
     var mqttTopic: String
     var clientIdSuffix: String
     var launchAtLogin: Bool

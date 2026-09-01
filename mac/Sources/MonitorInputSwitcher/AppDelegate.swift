@@ -12,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
 
     private var pollTimer: Timer?
+    private var currentVCPValue: Int?
+    private var lastPublishedVCPValue: Int?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -26,7 +28,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusBar?.onRefreshCurrentInput = { [weak self] in self?.refreshCurrentInput() }
 
         mqtt.onValue = { [weak self] value in self?.handleMQTTValue(value) }
-        mqtt.onConnectionStateChanged = { [weak self] connected in self?.statusBar?.setMQTTConnected(connected) }
+        mqtt.onConnectionStateChanged = { [weak self] connected in
+            self?.statusBar?.setMQTTConnected(connected)
+            if connected {
+                self?.publishDiscoveryConfig()
+                // Re-assert current state on every (re)connect, bypassing
+                // the dedupe below - covers the startup race where the DDC
+                // probe resolves before MQTT finishes connecting (the
+                // state publish then silently no-ops on an empty topic
+                // and would otherwise never be retried), and re-primes a
+                // retained value the broker may have lost.
+                self?.publishCurrentInput(vcpValue: self?.currentVCPValue, force: true)
+            }
+        }
 
         settingsStore.$settings
             // Settings fields are bound live to the Settings UI, so every
@@ -47,6 +61,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
+        // Inputs can be renamed/added/removed independently of the broker
+        // settings above; when that happens, re-publish the Home Assistant
+        // discovery config so its `options` list stays in sync. dropFirst()
+        // skips the initial value $settings emits on subscribe - that case
+        // is already covered by the (re)connect handler above, and firing
+        // here too would just race it before MQTT has actually connected.
+        settingsStore.$settings
+            .map(\.inputs)
+            .removeDuplicates()
+            .dropFirst()
+            .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.publishDiscoveryConfig() }
+            .store(in: &cancellables)
+
         LoginItemService.setEnabled(settingsStore.settings.launchAtLogin)
 
         refreshCurrentInput()
@@ -62,7 +90,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 if ok {
                     NSLogInfo("Switched input to \(input.name) (VCP \(input.vcpValue))")
+                    self.currentVCPValue = input.vcpValue
                     self.statusBar?.setCurrentVCPValue(input.vcpValue)
+                    self.publishCurrentInput(vcpValue: input.vcpValue)
                 } else {
                     NSLogError("Failed to switch input to \(input.name)")
                 }
@@ -86,9 +116,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let value = self.ddc.getCurrentInput()
             NSLogInfo("refreshCurrentInput: parsed VCP value = \(String(describing: value))")
             DispatchQueue.main.async {
+                self.currentVCPValue = value
                 self.statusBar?.setCurrentVCPValue(value)
+                self.publishCurrentInput(vcpValue: value)
             }
         }
+    }
+
+    /// Publishes the current input to the MQTT state topic. Normally only
+    /// when it actually changed since the last publish - this runs on
+    /// every menu open and on a 60s poll, and republishing an unchanged
+    /// value on every tick would be pointless traffic. Pass `force: true`
+    /// to bypass that and publish regardless (see the (re)connect handler
+    /// above for why that's needed).
+    private func publishCurrentInput(vcpValue: Int?, force: Bool = false) {
+        guard let vcpValue, force || vcpValue != lastPublishedVCPValue,
+            let input = settingsStore.settings.inputs.first(where: { $0.vcpValue == vcpValue })
+        else { return }
+        lastPublishedVCPValue = vcpValue
+        mqtt.publish(input.mqttValue)
+    }
+
+    /// Publishes the Home Assistant MQTT Discovery config for this
+    /// instance's input `select` entity. `uniqueId` is keyed off the
+    /// per-install `clientIdSuffix` (stable even if the monitor is later
+    /// swapped), while `name`/`deviceName` use the DDC-read monitor name
+    /// when available, so multiple monitors/installs show up as distinct,
+    /// clearly labeled entities in Home Assistant instead of colliding.
+    private func publishDiscoveryConfig() {
+        let settings = settingsStore.settings
+        let options = settings.inputs.map(\.mqttValue).filter { !$0.isEmpty }
+        guard !options.isEmpty else { return }
+        let displayName = externalDisplayName() ?? ddc.currentDisplayName ?? "Monitor"
+        mqtt.publishDiscovery(
+            uniqueId: "monitor_input_switcher_\(settings.clientIdSuffix)",
+            name: "\(displayName) Input",
+            deviceName: displayName,
+            options: options
+        )
+    }
+
+    /// The connected external display's name (from its EDID, via
+    /// ColorSync/CoreGraphics), e.g. "LG UltraFine" - works uniformly on
+    /// both Intel and Apple Silicon, unlike the DDC transport's own
+    /// `displayName` (which on Intel is just an IOFramebuffer bus label,
+    /// since there's no public API left to tie that back to an
+    /// NSScreen/CGDirectDisplayID). Falls back to `ddc.currentDisplayName`
+    /// when no external screen is found (e.g. before macOS has finished
+    /// enumerating displays).
+    private func externalDisplayName() -> String? {
+        for screen in NSScreen.screens {
+            guard let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { continue }
+            let displayID = CGDirectDisplayID(screenNumber.uint32Value)
+            if CGDisplayIsBuiltin(displayID) == 0 {
+                return screen.localizedName
+            }
+        }
+        return nil
     }
 
     private func showSettings() {
