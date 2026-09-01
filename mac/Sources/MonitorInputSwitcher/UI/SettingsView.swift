@@ -68,6 +68,14 @@ struct SettingsView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .frame(width: 720, height: 480)
+        // NavigationSplitView renders its own title in the window-toolbar
+        // area - independently of the NSWindow's own titleVisibility/
+        // titlebarAppearsTransparent settings - defaulting to the
+        // NSWindow's `title` when no navigationTitle is set. Both of these
+        // are needed to actually remove the visible text: hiding the
+        // toolbar alone left the title showing.
+        .navigationTitle("")
+        .toolbar(.hidden, for: .windowToolbar)
         // If the selected monitor gets removed (via "Remove Monitor"),
         // fall back to a section that's guaranteed to still exist rather
         // than showing an empty detail pane for a dangling selection.
@@ -105,7 +113,21 @@ private struct MQTTBrokerSettings: View {
             Text("MQTT")
                 .font(.title2.bold())
 
-            VStack(spacing: 10) {
+            ToggleRow(label: "Enable MQTT", isOn: $store.settings.mqttEnabled)
+
+            if store.settings.mqttEnabled {
+                FormRow("Status") {
+                    LiveStatusLabel(connected: store.mqttConnected)
+                }
+            } else {
+                FormRow("") {
+                    Text("MQTT is off - the app won't connect to a broker, read the stored password, publish state, or accept remote commands. Menu bar switching still works.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Fieldset {
                 FormRow("Server") {
                     PlainTextField(text: $store.settings.mqttHost, placeholder: "mqtt.example.com")
                 }
@@ -131,6 +153,11 @@ private struct MQTTBrokerSettings: View {
                         .foregroundStyle(.secondary)
                 }
                 FormRow("") {
+                    Text("Changes on this screen are saved automatically as you type - there's no separate Save button.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                FormRow("") {
                     HStack {
                         ConnectionStatusLabel(result: store.connectionTestResult)
                         Spacer()
@@ -138,6 +165,11 @@ private struct MQTTBrokerSettings: View {
                     }
                 }
             }
+            // The whole broker form is pointless to touch while MQTT is
+            // off - disabling it (rather than just hiding it) keeps the
+            // saved values visible for reference/next time it's turned on.
+            .disabled(!store.settings.mqttEnabled)
+            .opacity(store.settings.mqttEnabled ? 1 : 0.5)
         }
     }
 }
@@ -151,7 +183,7 @@ private struct GeneralSettings: View {
             Text("General")
                 .font(.title2.bold())
 
-            VStack(spacing: 10) {
+            Fieldset {
                 ToggleRow(label: "Start at Login", isOn: Binding(
                     get: { store.settings.launchAtLogin },
                     set: { newValue in
@@ -174,36 +206,55 @@ private struct MonitorSettings: View {
     @Binding var monitor: MonitorConfig
     var onRemove: () -> Void
 
+    // Editing the name in-place in the headline (pencil toggles this)
+    // instead of a separate "Name" field below it, which just duplicated
+    // the same value on screen.
+    @State private var isEditingName = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(monitor.name.isEmpty ? "Monitor" : monitor.name)
-                .font(.title2.bold())
-
-            FormRow("Name") {
-                PlainTextField(text: $monitor.name)
+            HStack(spacing: 8) {
+                if isEditingName {
+                    PlainTextField(text: $monitor.name)
+                        .frame(maxWidth: 280)
+                } else {
+                    Text(monitor.name.isEmpty ? "Monitor" : monitor.name)
+                        .font(.title2.bold())
+                }
+                Button {
+                    isEditingName.toggle()
+                } label: {
+                    Image(systemName: isEditingName ? "checkmark.circle.fill" : "square.and.pencil")
+                        .font(.title2)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help(isEditingName ? "Confirm name" : "Edit name")
             }
 
-            InputMappingRows(inputs: $monitor.inputs)
+            Fieldset {
+                InputMappingRows(inputs: $monitor.inputs)
 
-            HStack {
-                Button {
-                    monitor.inputs.append(InputMapping(name: "New Input", mqttValue: "", vcpValue: 0))
-                } label: {
-                    Label("Add Input", systemImage: "plus.circle.fill")
+                HStack {
+                    Button {
+                        monitor.inputs.append(InputMapping(name: "New Input", mqttValue: "", vcpValue: 0))
+                    } label: {
+                        Label("Add Input", systemImage: "plus.circle.fill")
+                    }
+                    .buttonStyle(.borderless)
+
+                    Spacer()
+
+                    // Removes this monitor's whole configuration - for one
+                    // that's been permanently disconnected/sold. A monitor
+                    // that's just temporarily unplugged shouldn't be
+                    // removed here: it keeps its config (and VCP mappings)
+                    // and gets matched again the next time it's detected.
+                    Button(role: .destructive, action: onRemove) {
+                        Label("Remove Monitor", systemImage: "trash")
+                    }
+                    .buttonStyle(.borderless)
                 }
-                .buttonStyle(.borderless)
-
-                Spacer()
-
-                // Removes this monitor's whole configuration - for one
-                // that's been permanently disconnected/sold. A monitor
-                // that's just temporarily unplugged shouldn't be removed
-                // here: it keeps its config (and VCP mappings) and gets
-                // matched again the next time it's detected.
-                Button(role: .destructive, action: onRemove) {
-                    Label("Remove Monitor", systemImage: "trash")
-                }
-                .buttonStyle(.borderless)
             }
 
             Text("Map incoming MQTT payload values to a DDC/CI input-source (VCP 0x60) value. These also appear in the menu bar dropdown, with each monitor's current input highlighted. VCP values for the same port can differ between monitor models.")
@@ -218,6 +269,25 @@ private struct MonitorSettings: View {
 /// every detail pane - uses the exact same `Layout.labelWidth`, so all the
 /// label text lines up on one edge and all the fields/controls line up on
 /// the other, independent of label text length or control type.
+/// An HTML `<fieldset>`-style bordered box grouping a set of form rows -
+/// used for every field group in Settings so related controls (the MQTT
+/// broker fields, a monitor's inputs, ...) read as one visually
+/// contained unit rather than just floating in the page.
+private struct Fieldset<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(spacing: 10) {
+            content
+        }
+        .padding(14)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+        )
+    }
+}
+
 private struct FormRow<Content: View>: View {
     let label: String
     @ViewBuilder let content: Content
@@ -255,6 +325,20 @@ private struct ToggleRow: View {
             Toggle("", isOn: $isOn)
                 .labelsHidden()
         }
+    }
+}
+
+/// The app's actual, live MQTT connection state - distinct from
+/// `ConnectionStatusLabel`, which only shows the result of a one-off
+/// "Test Connection" click and otherwise stays blank. This is always
+/// visible so it's clear whether the broker connection is currently up,
+/// without having to click anything.
+private struct LiveStatusLabel: View {
+    let connected: Bool
+
+    var body: some View {
+        Label(connected ? "Connected" : "Disconnected", systemImage: connected ? "checkmark.circle.fill" : "xmark.circle.fill")
+            .foregroundStyle(connected ? .green : .secondary)
     }
 }
 
@@ -320,6 +404,7 @@ private struct InputMappingRows: View {
                     }
                     .buttonStyle(.plain)
                     .frame(width: Layout.deleteButtonWidth)
+                    .help("Remove this input")
                 }
             }
         }

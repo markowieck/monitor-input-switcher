@@ -37,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mqtt.onValue = { [weak self] commandTopic, value in self?.handleMQTTValue(commandTopic: commandTopic, value: value) }
         mqtt.onConnectionStateChanged = { [weak self] connected in
             self?.statusBar?.setMQTTConnected(connected)
+            self?.settingsStore.mqttConnected = connected
             if connected {
                 self?.publishAllDiscoveryConfigs()
                 // Re-assert current state on every (re)connect, bypassing
@@ -56,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // on every character typed.
             .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
             .removeDuplicates { old, new in
+                old.mqttEnabled == new.mqttEnabled &&
                 old.mqttHost == new.mqttHost &&
                 old.mqttPort == new.mqttPort &&
                 old.mqttUseTLS == new.mqttUseTLS &&
@@ -69,6 +71,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .sink { [weak self] settings in
                 guard let self else { return }
+                guard settings.mqttEnabled else {
+                    self.mqtt.stop()
+                    self.statusBar?.setMQTTConnected(false)
+                    self.settingsStore.mqttConnected = false
+                    return
+                }
                 self.mqtt.start(
                     settings: settings,
                     password: self.settingsStore.mqttPassword,

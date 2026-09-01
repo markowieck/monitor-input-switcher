@@ -105,10 +105,15 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private func rebuildMenu() {
         menu.removeAllItems()
 
-        let statusLine = NSMenuItem(
-            title: mqttConnected ? "MQTT: Connected" : "MQTT: Disconnected",
-            action: nil, keyEquivalent: ""
-        )
+        let mqttStatusText: String
+        if !settingsStore.settings.mqttEnabled {
+            mqttStatusText = "MQTT: Off"
+        } else if mqttConnected {
+            mqttStatusText = "MQTT: Connected"
+        } else {
+            mqttStatusText = "MQTT: Disconnected"
+        }
+        let statusLine = NSMenuItem(title: mqttStatusText, action: nil, keyEquivalent: "")
         statusLine.isEnabled = false
         menu.addItem(statusLine)
         menu.addItem(.separator())

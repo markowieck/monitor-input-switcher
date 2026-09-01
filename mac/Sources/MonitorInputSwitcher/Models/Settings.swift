@@ -4,6 +4,10 @@ import Foundation
 /// here - it lives in the Keychain (see KeychainStore) and is merged in
 /// at load time / stripped out at save time.
 struct Settings: Codable, Equatable {
+    /// Whether the app connects to an MQTT broker at all. Off by default
+    /// for someone who only wants menu-bar/DDC switching and doesn't want
+    /// the app touching the network or the Keychain-stored password.
+    var mqttEnabled: Bool
     var mqttHost: String
     var mqttPort: Int
     var mqttUseTLS: Bool
@@ -20,6 +24,7 @@ struct Settings: Codable, Equatable {
     var monitors: [MonitorConfig]
 
     static let `default` = Settings(
+        mqttEnabled: true,
         mqttHost: "",
         mqttPort: 1883,
         mqttUseTLS: false,
@@ -44,7 +49,8 @@ struct Settings: Codable, Equatable {
         ]
     }
 
-    init(mqttHost: String, mqttPort: Int, mqttUseTLS: Bool, mqttUsername: String, mqttTopic: String, clientIdSuffix: String, launchAtLogin: Bool, monitors: [MonitorConfig]) {
+    init(mqttEnabled: Bool, mqttHost: String, mqttPort: Int, mqttUseTLS: Bool, mqttUsername: String, mqttTopic: String, clientIdSuffix: String, launchAtLogin: Bool, monitors: [MonitorConfig]) {
+        self.mqttEnabled = mqttEnabled
         self.mqttHost = mqttHost
         self.mqttPort = mqttPort
         self.mqttUseTLS = mqttUseTLS
@@ -56,12 +62,16 @@ struct Settings: Codable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case mqttHost, mqttPort, mqttUseTLS, mqttUsername, mqttTopic, clientIdSuffix, launchAtLogin, monitors
+        case mqttEnabled, mqttHost, mqttPort, mqttUseTLS, mqttUsername, mqttTopic, clientIdSuffix, launchAtLogin, monitors
         case legacyInputs = "inputs"
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        // Settings.json written before the MQTT toggle existed: default to
+        // enabled, since that was the only behavior back then and existing
+        // setups (like the one this shipped against) rely on it staying on.
+        mqttEnabled = try c.decodeIfPresent(Bool.self, forKey: .mqttEnabled) ?? true
         mqttHost = try c.decode(String.self, forKey: .mqttHost)
         mqttPort = try c.decode(Int.self, forKey: .mqttPort)
         mqttUseTLS = try c.decode(Bool.self, forKey: .mqttUseTLS)
@@ -83,6 +93,7 @@ struct Settings: Codable, Equatable {
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(mqttEnabled, forKey: .mqttEnabled)
         try c.encode(mqttHost, forKey: .mqttHost)
         try c.encode(mqttPort, forKey: .mqttPort)
         try c.encode(mqttUseTLS, forKey: .mqttUseTLS)
