@@ -305,20 +305,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// A monitor's state/command topics. With exactly one monitor
-    /// configured, these are exactly `settings.mqttTopic` /
-    /// `settings.mqttTopic + "/set"` - unchanged from before multi-monitor
-    /// support, so existing single-monitor Home Assistant setups keep
-    /// working without any reconfiguration. Once a second monitor is
-    /// added, every monitor (including the first) moves to its own
-    /// "<topic>/<id>" / ".../set" pair - see `publishDiscoveryConfig`.
+    /// A monitor's state/command topics: always `<topic>/<slug>` /
+    /// `<topic>/<slug>/set` - see `topicSlug(for:in:)`. Always suffixing,
+    /// rather than only once a second monitor is configured on this Mac,
+    /// matters once more than one *install* shares the same broker and
+    /// topic setting: two different Macs each single-monitor would
+    /// otherwise both publish/subscribe on the bare `<topic>`, so
+    /// switching either one's Home Assistant entity would send the
+    /// command to both, and whichever last published state would
+    /// silently clobber the other's (observed running this app on two
+    /// Macs against the same broker).
     private func topics(for monitor: MonitorConfig, in settings: Settings) -> (state: String, command: String) {
-        let base = settings.mqttTopic
-        guard settings.monitors.count > 1 else {
-            return (base, base + "/set")
+        let slug = topicSlug(for: monitor, in: settings)
+        return ("\(settings.mqttTopic)/\(slug)", "\(settings.mqttTopic)/\(slug)/set")
+    }
+
+    /// Identifies a monitor for both its MQTT topic suffix and its Home
+    /// Assistant unique_id (see `uniqueId(for:in:)`) - derived purely
+    /// from the monitor's EDID identity when known, so the same physical
+    /// monitor gets the same slug regardless of which Mac is driving it
+    /// or how many other monitors are configured there. Falls back to a
+    /// per-install id (stable on this Mac, but not across Macs or
+    /// necessarily unique across monitors of the same model - see
+    /// `MonitorConfig.edidIdentity`) for a monitor whose EDID couldn't be
+    /// read at all.
+    private func topicSlug(for monitor: MonitorConfig, in settings: Settings) -> String {
+        if let edidIdentity = monitor.edidIdentity {
+            return edidIdentity.replacingOccurrences(of: "-", with: "_")
         }
-        let slug = monitor.id.uuidString.prefix(8).lowercased()
-        return ("\(base)/\(slug)", "\(base)/\(slug)/set")
+        return "\(settings.clientIdSuffix)_\(monitor.id.uuidString.prefix(8).lowercased())"
     }
 
     /// Publishes the current input to a monitor's MQTT state topic.
@@ -368,26 +383,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    /// Home Assistant discovery unique_id for a monitor. When the monitor's
-    /// EDID identity is known, this is derived purely from that - the same
-    /// physical monitor gets the same unique_id (and therefore the same HA
-    /// device) no matter which Mac happens to be driving it. Falls back to
-    /// a per-install id (stable on this Mac, but not across Macs) for a
-    /// monitor whose EDID couldn't be read - older hardware, or a
-    /// transport type that doesn't expose one.
-    ///
-    /// Switching an existing single-monitor setup from the old
-    /// per-install-only scheme to an EDID-based one is a one-time breaking
-    /// change: the old `monitor_input_switcher_<clientIdSuffix>` entity is
-    /// orphaned in HA (retained, no longer referenced) - remove it there
-    /// manually once. Same when a second monitor is added, either way.
+    /// Home Assistant discovery unique_id for a monitor - built from the
+    /// same slug as its MQTT topics, see `topicSlug(for:in:)`. Changing
+    /// the underlying slug (e.g. a monitor's EDID identity becoming known
+    /// for the first time, or this scheme changing) is a one-time
+    /// breaking change: the old entity is orphaned in HA (retained, no
+    /// longer referenced) - remove it there manually once.
     private func uniqueId(for monitor: MonitorConfig, in settings: Settings) -> String {
-        if let edidIdentity = monitor.edidIdentity {
-            return "monitor_input_switcher_\(edidIdentity.replacingOccurrences(of: "-", with: "_"))"
-        }
-        return settings.monitors.count > 1
-            ? "monitor_input_switcher_\(settings.clientIdSuffix)_\(monitor.id.uuidString.prefix(8).lowercased())"
-            : "monitor_input_switcher_\(settings.clientIdSuffix)"
+        "monitor_input_switcher_\(topicSlug(for: monitor, in: settings))"
     }
 
     private func showSettings() {
