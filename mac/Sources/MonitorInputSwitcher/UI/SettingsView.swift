@@ -213,23 +213,31 @@ private struct MonitorSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 8) {
-                if isEditingName {
-                    PlainTextField(text: $monitor.name)
-                        .frame(maxWidth: 280)
-                } else {
-                    Text(monitor.name.isEmpty ? "Monitor" : monitor.name)
-                        .font(.title2.bold())
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 8) {
+                    if isEditingName {
+                        PlainTextField(text: $monitor.name)
+                            .frame(maxWidth: 280)
+                    } else {
+                        Text(monitor.name.isEmpty ? "Monitor" : monitor.name)
+                            .font(.title2.bold())
+                    }
+                    Button {
+                        isEditingName.toggle()
+                    } label: {
+                        Image(systemName: isEditingName ? "checkmark.circle.fill" : "square.and.pencil")
+                            .font(.title2)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help(isEditingName ? "Confirm name" : "Edit name")
                 }
-                Button {
-                    isEditingName.toggle()
-                } label: {
-                    Image(systemName: isEditingName ? "checkmark.circle.fill" : "square.and.pencil")
-                        .font(.title2)
+
+                if let serialNumber = monitor.edidSerialNumber {
+                    Text("Serial: \(serialNumber)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help(isEditingName ? "Confirm name" : "Edit name")
             }
 
             Fieldset {

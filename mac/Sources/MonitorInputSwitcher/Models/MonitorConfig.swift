@@ -33,4 +33,16 @@ struct MonitorConfig: Codable, Identifiable, Equatable {
         self.name = name
         self.inputs = inputs
     }
+
+    /// Just the serial component of `edidIdentity` ("vvvv-pppp-ssssssss"),
+    /// for display in Settings - e.g. "41504342" rather than the full
+    /// "10ac-f169-41504342". nil both when there's no EDID identity at
+    /// all and when its serial field is all zeros (EDID carries a serial
+    /// slot but the monitor didn't fill one in - common, not a real id).
+    var edidSerialNumber: String? {
+        guard let edidIdentity, let serial = edidIdentity.split(separator: "-").last, serial != "00000000" else {
+            return nil
+        }
+        return serial.uppercased()
+    }
 }
