@@ -148,10 +148,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let options = settings.inputs.map(\.mqttValue).filter { !$0.isEmpty }
         guard !options.isEmpty else { return }
         let displayName = externalDisplayName() ?? ddc.currentDisplayName ?? "Monitor"
+        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
         mqtt.publishDiscovery(
             uniqueId: "monitor_input_switcher_\(settings.clientIdSuffix)",
             name: "\(displayName) Input",
             deviceName: displayName,
+            appVersion: appVersion,
             options: options
         )
     }

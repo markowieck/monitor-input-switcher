@@ -110,7 +110,7 @@ final class MQTTService {
     /// input shows up in Home Assistant automatically - no manual YAML
     /// needed on the HA side. Retained, so HA (or its MQTT broker)
     /// picks it up whenever it (re)connects, not just at publish time.
-    func publishDiscovery(uniqueId: String, name: String, deviceName: String, options: [String]) {
+    func publishDiscovery(uniqueId: String, name: String, deviceName: String, appVersion: String, options: [String]) {
         guard !currentStateTopic.isEmpty, !currentCommandTopic.isEmpty, !options.isEmpty else { return }
         let configPayload: [String: Any] = [
             "name": name,
@@ -122,7 +122,8 @@ final class MQTTService {
             "device": [
                 "identifiers": [uniqueId],
                 "name": deviceName,
-                "manufacturer": "Monitor Input Switcher"
+                "manufacturer": "Monitor Input Switcher",
+                "model": "v\(appVersion)"
             ]
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: configPayload) else {
