@@ -10,11 +10,13 @@ import CoreGraphics
 final class IntelDDCTransport: DDCTransport {
     let displayName: String
     let edidIdentity: String?
+    let edidSerialNumber: String?
     private let interface: io_service_t
 
-    private init(displayName: String, edidIdentity: String?, interface: io_service_t) {
+    private init(displayName: String, edidIdentity: String?, edidSerialNumber: String?, interface: io_service_t) {
         self.displayName = displayName
         self.edidIdentity = edidIdentity
+        self.edidSerialNumber = edidSerialNumber
         self.interface = interface
     }
 
@@ -64,15 +66,15 @@ final class IntelDDCTransport: DDCTransport {
             // (IODisplayConnect) -> "AppleDisplay"), not on the
             // framebuffer itself - same identity for every I2C bus this
             // framebuffer exposes.
-            let edidIdentity = Self.lookupEdidIdentity(descendantOf: framebuffer)
-            NSLogInfo("IntelDDC: framebuffer #\(fbIndex) edidIdentity=\(edidIdentity ?? "nil")")
+            let edidInfo = Self.lookupEdidInfo(descendantOf: framebuffer)
+            NSLogInfo("IntelDDC: framebuffer #\(fbIndex) edidIdentity=\(edidInfo?.identity ?? "nil")")
 
             for bus in 0..<busCount {
                 var interface: io_service_t = 0
                 guard IOFBCopyI2CInterfaceForBus(framebuffer, IOOptionBits(bus), &interface) == kIOReturnSuccess, interface != 0 else {
                     continue
                 }
-                result.append(IntelDDCTransport(displayName: "\(fbName) bus \(bus)", edidIdentity: edidIdentity, interface: interface))
+                result.append(IntelDDCTransport(displayName: "\(fbName) bus \(bus)", edidIdentity: edidInfo?.identity, edidSerialNumber: edidInfo?.serial, interface: interface))
             }
         }
         NSLogInfo("IntelDDC: discovered \(result.count) transport(s): \(result.map { $0.displayName })")
@@ -85,7 +87,7 @@ final class IntelDDCTransport: DDCTransport {
     /// - so this checks every child and grandchild for the relevant
     /// properties rather than assuming an exact class name (that nesting
     /// is what's actually observed, not documented API).
-    private static func lookupEdidIdentity(descendantOf service: io_service_t) -> String? {
+    private static func lookupEdidInfo(descendantOf service: io_service_t) -> (identity: String, serial: String?)? {
         var childIterator: io_iterator_t = 0
         guard IORegistryEntryGetChildIterator(service, kIOServicePlane, &childIterator) == kIOReturnSuccess else {
             return nil
@@ -98,22 +100,24 @@ final class IntelDDCTransport: DDCTransport {
                 IOObjectRelease(child)
                 child = IOIteratorNext(childIterator)
             }
-            if let identity = edidIdentity(fromDisplayNode: child) {
-                return identity
+            if let info = edidInfo(fromDisplayNode: child) {
+                return info
             }
-            if let identity = lookupEdidIdentity(descendantOf: child) {
-                return identity
+            if let info = lookupEdidInfo(descendantOf: child) {
+                return info
             }
         }
         return nil
     }
 
-    private static func edidIdentity(fromDisplayNode node: io_service_t) -> String? {
+    private static func edidInfo(fromDisplayNode node: io_service_t) -> (identity: String, serial: String?)? {
         guard let vendor = ioRegistryUInt32(node, "DisplayVendorID"),
             let product = ioRegistryUInt32(node, "DisplayProductID")
         else { return nil }
-        let serial = ioRegistryUInt32(node, "DisplaySerialNumber") ?? 0
-        return String(format: "%04x-%04x-%08x", vendor, product, serial)
+        let serialValue = ioRegistryUInt32(node, "DisplaySerialNumber") ?? 0
+        let identity = String(format: "%04x-%04x-%08x", vendor, product, serialValue)
+        let serial = serialValue != 0 ? String(format: "%08x", serialValue) : nil
+        return (identity, serial)
     }
 
     private static func ioRegistryUInt32(_ service: io_service_t, _ key: String) -> UInt32? {

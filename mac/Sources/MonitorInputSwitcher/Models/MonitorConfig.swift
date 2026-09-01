@@ -13,36 +13,29 @@ struct MonitorConfig: Codable, Identifiable, Equatable {
     /// (a single flat `inputs` list) transparently upgrades - see
     /// `Settings.init(from:)`.
     var transportKey: String
-    /// The monitor's EDID-derived hardware identity ("vvvv-pppp-ssssssss"
-    /// hex - see `DDCTransport.edidIdentity`), when it was available at
-    /// match time. Unlike `transportKey` (which can be a GPU-port bus
-    /// label with no EDID data behind it), this is a property of the
-    /// physical monitor itself - stable across GPU ports, reboots, and
-    /// even different Macs. Used as the Home Assistant discovery
-    /// unique_id when present, so the same physical monitor is
-    /// recognized as the same device regardless of which Mac happens to
-    /// be driving it (see AppDelegate.uniqueId(for:in:)).
+    /// The monitor's EDID-derived hardware identity (see
+    /// `DDCTransport.edidIdentity`), when it was available at match time.
+    /// Unlike `transportKey` (which can be a GPU-port bus label with no
+    /// EDID data behind it), this is a property of the physical monitor
+    /// itself - stable across GPU ports, reboots, and even different
+    /// Macs. Used as the Home Assistant discovery unique_id when
+    /// present, so the same physical monitor is recognized as the same
+    /// device regardless of which Mac happens to be driving it (see
+    /// AppDelegate.uniqueId(for:in:)). Opaque/platform-specific
+    /// formatting - see `edidSerialNumber` for a clean display value.
     var edidIdentity: String?
+    /// Just the serial component of `edidIdentity` (see
+    /// `DDCTransport.edidSerialNumber`), for display in Settings.
+    var edidSerialNumber: String?
     var name: String
     var inputs: [InputMapping]
 
-    init(id: UUID = UUID(), transportKey: String = "", edidIdentity: String? = nil, name: String, inputs: [InputMapping]) {
+    init(id: UUID = UUID(), transportKey: String = "", edidIdentity: String? = nil, edidSerialNumber: String? = nil, name: String, inputs: [InputMapping]) {
         self.id = id
         self.transportKey = transportKey
         self.edidIdentity = edidIdentity
+        self.edidSerialNumber = edidSerialNumber
         self.name = name
         self.inputs = inputs
-    }
-
-    /// Just the serial component of `edidIdentity` ("vvvv-pppp-ssssssss"),
-    /// for display in Settings - e.g. "41504342" rather than the full
-    /// "10ac-f169-41504342". nil both when there's no EDID identity at
-    /// all and when its serial field is all zeros (EDID carries a serial
-    /// slot but the monitor didn't fill one in - common, not a real id).
-    var edidSerialNumber: String? {
-        guard let edidIdentity, let serial = edidIdentity.split(separator: "-").last, serial != "00000000" else {
-            return nil
-        }
-        return serial.uppercased()
     }
 }

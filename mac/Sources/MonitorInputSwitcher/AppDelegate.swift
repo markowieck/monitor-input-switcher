@@ -254,6 +254,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     settings.monitors[existingIndex].edidIdentity = edidIdentity
                     settingsChanged = true
                 }
+                if settings.monitors[existingIndex].edidSerialNumber != transport.edidSerialNumber, let edidSerialNumber = transport.edidSerialNumber {
+                    settings.monitors[existingIndex].edidSerialNumber = edidSerialNumber
+                    settingsChanged = true
+                }
                 let id = settings.monitors[existingIndex].id
                 claimed.insert(id)
                 newLiveTransports[id] = transport
@@ -263,6 +267,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let placeholderIndex = settings.monitors.firstIndex(where: { $0.transportKey.isEmpty && !claimed.contains($0.id) }) {
                 settings.monitors[placeholderIndex].transportKey = transport.displayName
                 settings.monitors[placeholderIndex].edidIdentity = transport.edidIdentity
+                settings.monitors[placeholderIndex].edidSerialNumber = transport.edidSerialNumber
                 if settings.monitors[placeholderIndex].name.isEmpty || settings.monitors[placeholderIndex].name == "Monitor" {
                     settings.monitors[placeholderIndex].name = detectedName
                 }
@@ -273,7 +278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 continue
             }
 
-            let newMonitor = MonitorConfig(transportKey: transport.displayName, edidIdentity: transport.edidIdentity, name: detectedName, inputs: Settings.defaultInputTemplate())
+            let newMonitor = MonitorConfig(transportKey: transport.displayName, edidIdentity: transport.edidIdentity, edidSerialNumber: transport.edidSerialNumber, name: detectedName, inputs: Settings.defaultInputTemplate())
             settings.monitors.append(newMonitor)
             claimed.insert(newMonitor.id)
             newLiveTransports[newMonitor.id] = transport

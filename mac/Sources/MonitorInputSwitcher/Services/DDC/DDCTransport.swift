@@ -7,13 +7,20 @@ protocol DDCTransport {
     var displayName: String { get }
 
     /// A hardware identity for this physical display derived from its
-    /// EDID (vendor/product/serial, as "vvvv-pppp-ssssssss" hex), if one
-    /// could be read. Unlike `displayName` - which for the Intel path is
-    /// just a GPU-port bus label - this stays the same for the same
-    /// physical monitor across reboots, GPU ports, and even different
-    /// Macs, since it's a property of the monitor itself. nil when the
-    /// EDID couldn't be read or didn't carry a serial number.
+    /// EDID (vendor + serial), if one could be read. Unlike `displayName`
+    /// - which for the Intel path is just a GPU-port bus label - this
+    /// stays the same for the same physical monitor across reboots, GPU
+    /// ports, and even different Macs, since it's a property of the
+    /// monitor itself. nil when the EDID couldn't be read or didn't carry
+    /// a serial number. Exact formatting is opaque/platform-specific -
+    /// treat it as an id, not something to parse; see `edidSerialNumber`
+    /// for a clean, display-ready value.
     var edidIdentity: String? { get }
+
+    /// Just the serial component of `edidIdentity`, for display in the UI
+    /// (e.g. Settings shows this under the monitor's name). nil under the
+    /// same conditions as `edidIdentity`.
+    var edidSerialNumber: String? { get }
 
     /// Write-only transaction (e.g. "Set VCP Feature" - no reply expected).
     @discardableResult

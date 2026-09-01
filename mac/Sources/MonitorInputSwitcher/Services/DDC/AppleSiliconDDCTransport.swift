@@ -18,6 +18,7 @@ import CoreGraphics
 final class AppleSiliconDDCTransport: DDCTransport {
     let displayName: String
     let edidIdentity: String?
+    let edidSerialNumber: String?
     private let service: AnyObject
 
     private typealias ReadFn = @convention(c) (AnyObject, UInt32, UInt32, UnsafeMutableRawPointer, UInt32) -> IOReturn
@@ -36,9 +37,10 @@ final class AppleSiliconDDCTransport: DDCTransport {
         return unsafeBitCast(sym, to: T.self)
     }
 
-    private init(displayName: String, edidIdentity: String?, service: AnyObject) {
+    private init(displayName: String, edidIdentity: String?, edidSerialNumber: String?, service: AnyObject) {
         self.displayName = displayName
         self.edidIdentity = edidIdentity
+        self.edidSerialNumber = edidSerialNumber
         self.service = service
     }
 
@@ -48,113 +50,130 @@ final class AppleSiliconDDCTransport: DDCTransport {
         readFn != nil && writeFn != nil && createWithServiceFn != nil
     }
 
+    /// Finding a display's EDID data takes two passes, because it doesn't
+    /// live on the "DCPAVServiceProxy" node this transport is actually
+    /// built from (that one only carries `Location` and is what
+    /// `IOAVServiceCreateWithService` needs) - it's on a separate
+    /// "AppleCLCD2"/"IOMobileFramebufferShim" node with no parent/child
+    /// relationship to its DCPAVServiceProxy counterpart. The two are
+    /// just positioned next to each other in registry iteration order,
+    /// so this walks the *entire* IOService plane once and carries
+    /// forward the most recently seen framebuffer node's attributes,
+    /// pairing them with the very next DCPAVServiceProxy found - the
+    /// same approach the reference implementation this is based on
+    /// (waydabber/AppleSiliconDDC) uses, verified against its source.
     static func discoverAll() -> [DDCTransport] {
         guard isAvailable, let createWithServiceFn else {
             NSLogError("Apple Silicon DDC symbols unavailable on this system")
             return []
         }
 
-        var result: [(transport: AppleSiliconDDCTransport, vendor: UInt32, product: UInt32)] = []
+        let root = IORegistryGetRootEntry(kIOMainPortDefault)
+        defer { IOObjectRelease(root) }
 
         var iterator: io_iterator_t = 0
-        guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("DCPAVServiceProxy"), &iterator) == kIOReturnSuccess else {
-            NSLogError("AppleSiliconDDC: IOServiceGetMatchingServices(DCPAVServiceProxy) failed")
+        guard IORegistryEntryCreateIterator(root, kIOServicePlane, IOOptionBits(kIORegistryIterateRecursively), &iterator) == KERN_SUCCESS else {
+            NSLogError("AppleSiliconDDC: IORegistryEntryCreateIterator failed")
             return []
         }
         defer { IOObjectRelease(iterator) }
 
-        var ioService = IOIteratorNext(iterator)
+        var result: [AppleSiliconDDCTransport] = []
+        var pendingProductAttrs: [String: Any]?
         var index = 0
-        while ioService != 0 {
-            defer {
-                IOObjectRelease(ioService)
-                ioService = IOIteratorNext(iterator)
-            }
-            index += 1
 
-            let location = ioRegistryString(ioService, "Location")
-            let (vendor, product) = productAttributes(ioService)
-            guard location == "External" else {
-                NSLogInfo("AppleSiliconDDC: service #\(index) skipped, Location=\(location ?? "nil") vendor=\(vendor) product=\(product)")
+        var entry = IOIteratorNext(iterator)
+        while entry != 0 {
+            defer {
+                IOObjectRelease(entry)
+                entry = IOIteratorNext(iterator)
+            }
+            guard let name = ioRegistryEntryName(entry) else { continue }
+
+            if name.contains("AppleCLCD2") || name.contains("IOMobileFramebufferShim") {
+                pendingProductAttrs = readProductAttributes(entry)
                 continue
             }
-            guard let unmanaged = createWithServiceFn(nil, ioService) else {
+            guard name.contains("DCPAVServiceProxy") else { continue }
+            index += 1
+
+            // Consumed either way - an unrelated framebuffer node's
+            // attributes must not leak onto a later, different proxy.
+            let productAttrs = pendingProductAttrs
+            pendingProductAttrs = nil
+
+            let location = ioRegistryString(entry, "Location")
+            guard location == "External" else {
+                NSLogInfo("AppleSiliconDDC: service #\(index) skipped, Location=\(location ?? "nil")")
+                continue
+            }
+            guard let unmanaged = createWithServiceFn(nil, entry) else {
                 NSLogError("AppleSiliconDDC: service #\(index) IOAVServiceCreateWithService failed, Location=\(location ?? "nil")")
                 continue
             }
             let avService = unmanaged.takeRetainedValue()
 
-            let name = productName(ioService) ?? ("External Display" + (vendor != 0 ? " (vendor \(vendor))" : ""))
-            let edidIdentity = edidIdentity(ioService, vendor: vendor, product: product)
-            NSLogInfo("AppleSiliconDDC: service #\(index) accepted as \(name), Location=\(location ?? "nil") vendor=\(vendor) product=\(product) edidIdentity=\(edidIdentity ?? "nil")")
-            result.append((AppleSiliconDDCTransport(displayName: name, edidIdentity: edidIdentity, service: avService), vendor, product))
+            let displayName = productName(from: productAttrs) ?? "External Display"
+            let edidSerialNumber = edidSerialNumber(from: productAttrs)
+            let edidIdentity = edidIdentity(from: productAttrs, serial: edidSerialNumber)
+            NSLogInfo("AppleSiliconDDC: service #\(index) accepted as \(displayName), Location=\(location ?? "nil") edidIdentity=\(edidIdentity ?? "nil")")
+            result.append(AppleSiliconDDCTransport(displayName: displayName, edidIdentity: edidIdentity, edidSerialNumber: edidSerialNumber, service: avService))
         }
 
-        return result.map { $0.transport }
+        return result
     }
 
-    /// "DisplayAttributes" was observed to not be populated yet on the
-    /// DCPAVServiceProxy node the first time it's read right after
-    /// discovery (vendor/product/name all empty, despite DDC/CI itself
-    /// already working fine on the same service) - so this retries with
-    /// a short wait, logging what it actually found at each step to help
-    /// diagnose if it still comes up empty after retrying.
-    private static func displayProductAttributes(_ service: io_service_t) -> [String: Any]? {
-        for attempt in 1...5 {
-            guard let attrs = IORegistryEntryCreateCFProperty(service, "DisplayAttributes" as CFString, kCFAllocatorDefault, 0)?
-                .takeRetainedValue() as? [String: Any] else {
-                NSLogInfo("AppleSiliconDDC: DisplayAttributes not available yet (attempt \(attempt)/5)")
-                if attempt < 5 { Thread.sleep(forTimeInterval: 0.15) }
-                continue
-            }
-            guard let productAttrs = attrs["ProductAttributes"] as? [String: Any] else {
-                NSLogInfo("AppleSiliconDDC: DisplayAttributes present but no ProductAttributes (attempt \(attempt)/5): keys=\(attrs.keys.sorted())")
-                if attempt < 5 { Thread.sleep(forTimeInterval: 0.15) }
-                continue
-            }
-            NSLogInfo("AppleSiliconDDC: ProductAttributes found (attempt \(attempt)/5): keys=\(productAttrs.keys.sorted())")
-            return productAttrs
+    private static func ioRegistryEntryName(_ entry: io_service_t) -> String? {
+        var buffer = [CChar](repeating: 0, count: 128)
+        guard IORegistryEntryGetName(entry, &buffer) == KERN_SUCCESS else { return nil }
+        return String(cString: buffer)
+    }
+
+    private static func readProductAttributes(_ entry: io_service_t) -> [String: Any]? {
+        guard let attrs = IORegistryEntryCreateCFProperty(entry, "DisplayAttributes" as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue() as? [String: Any] else {
+            return nil
+        }
+        return attrs["ProductAttributes"] as? [String: Any]
+    }
+
+    /// The serial component of `edidIdentity` - see `DDCTransport.
+    /// edidSerialNumber`. Prefers the more human-readable
+    /// `AlphanumericSerialNumber` when a monitor provides one, else the
+    /// numeric `SerialNumber` as hex; nil when the EDID carries neither
+    /// (not every monitor fills these in).
+    private static func edidSerialNumber(from productAttrs: [String: Any]?) -> String? {
+        guard let productAttrs else { return nil }
+        if let alphanumericSerial = (productAttrs["AlphanumericSerialNumber"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !alphanumericSerial.isEmpty {
+            return alphanumericSerial
+        }
+        if let numericSerial = (productAttrs["SerialNumber"] as? NSNumber)?.uint32Value, numericSerial != 0 {
+            return String(format: "%08x", numericSerial)
         }
         return nil
     }
 
-    /// IOKit surfaces these numeric fields as `NSNumber`, boxing whatever
-    /// underlying C integer width DisplayServices actually used to build
-    /// the dictionary - which isn't necessarily `UInt32` under the hood,
-    /// so a direct `as? UInt32` cast can silently fail (return nil) even
-    /// though the value is right there. Going through `NSNumber` first
-    /// sidesteps that entirely - this bit `SerialNumber` in particular on
-    /// at least one Apple Silicon Mac, while `LegacyManufacturerID`/
-    /// `ProductID` happened to cast fine.
-    private static func productAttributeUInt32(_ productAttrs: [String: Any], _ key: String) -> UInt32? {
-        (productAttrs[key] as? NSNumber)?.uint32Value
-    }
-
-    private static func productAttributes(_ service: io_service_t) -> (vendor: UInt32, product: UInt32) {
-        guard let productAttrs = displayProductAttributes(service) else { return (0, 0) }
-        let vendor = productAttributeUInt32(productAttrs, "LegacyManufacturerID") ?? 0
-        let product = productAttributeUInt32(productAttrs, "ProductID") ?? 0
-        return (vendor, product)
-    }
-
-    /// Hardware identity ("vvvv-pppp-ssssssss" hex) for this display, from
-    /// its EDID vendor/product/serial - see `DDCTransport.edidIdentity`.
-    /// Requires at least vendor+product to be non-zero (both always
-    /// present when `productAttributes` succeeds); the serial itself is
-    /// optional per-monitor EDID data and defaults to 0 when absent.
-    private static func edidIdentity(_ service: io_service_t, vendor: UInt32, product: UInt32) -> String? {
-        guard vendor != 0 || product != 0 else { return nil }
-        let productAttrs = displayProductAttributes(service)
-        let serial = productAttrs.flatMap { productAttributeUInt32($0, "SerialNumber") } ?? 0
-        return String(format: "%04x-%04x-%08x", vendor, product, serial)
+    /// Hardware identity for this display, from its EDID manufacturer ID
+    /// and serial - see `DDCTransport.edidIdentity`. Requires an actual
+    /// serial - without one there's nothing here that's unique to this
+    /// specific physical unit rather than just its model, so this returns
+    /// nil rather than a manufacturer-only id that would collide with
+    /// every other unit of the same monitor model.
+    private static func edidIdentity(from productAttrs: [String: Any]?, serial: String?) -> String? {
+        guard let productAttrs, let serial else { return nil }
+        let manufacturerID = (productAttrs["ManufacturerID"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return "\(manufacturerID ?? "unknown")-\(serial)"
     }
 
     /// The monitor's real product name, as encoded in its EDID (the
-    /// "Monitor Name" descriptor block) and surfaced by the system here
-    /// as a locale-keyed dictionary, e.g. `["en_US": "LG UltraFine"]`.
-    /// Not every monitor's EDID carries one, so this can be nil.
-    private static func productName(_ service: io_service_t) -> String? {
-        guard let productAttrs = displayProductAttributes(service) else { return nil }
+    /// "Monitor Name" descriptor block). Surfaced either as a plain
+    /// string or as a locale-keyed dictionary (e.g.
+    /// `["en_US": "LG UltraFine"]`) depending on macOS version - not
+    /// every monitor's EDID carries one either way, so this can be nil.
+    private static func productName(from productAttrs: [String: Any]?) -> String? {
+        guard let productAttrs else { return nil }
         if let name = productAttrs["ProductName"] as? String {
             return name
         }
