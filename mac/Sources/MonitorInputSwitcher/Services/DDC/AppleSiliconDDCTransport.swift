@@ -17,6 +17,7 @@ import CoreGraphics
 /// Apple Silicon.
 final class AppleSiliconDDCTransport: DDCTransport {
     let displayName: String
+    let edidIdentity: String?
     private let service: AnyObject
 
     private typealias ReadFn = @convention(c) (AnyObject, UInt32, UInt32, UnsafeMutableRawPointer, UInt32) -> IOReturn
@@ -35,8 +36,9 @@ final class AppleSiliconDDCTransport: DDCTransport {
         return unsafeBitCast(sym, to: T.self)
     }
 
-    private init(displayName: String, service: AnyObject) {
+    private init(displayName: String, edidIdentity: String?, service: AnyObject) {
         self.displayName = displayName
+        self.edidIdentity = edidIdentity
         self.service = service
     }
 
@@ -83,8 +85,9 @@ final class AppleSiliconDDCTransport: DDCTransport {
             let avService = unmanaged.takeRetainedValue()
 
             let name = productName(ioService) ?? ("External Display" + (vendor != 0 ? " (vendor \(vendor))" : ""))
+            let edidIdentity = edidIdentity(ioService, vendor: vendor, product: product)
             NSLogInfo("AppleSiliconDDC: service #\(index) accepted as \(name), Location=\(location ?? "nil") vendor=\(vendor) product=\(product)")
-            result.append((AppleSiliconDDCTransport(displayName: name, service: avService), vendor, product))
+            result.append((AppleSiliconDDCTransport(displayName: name, edidIdentity: edidIdentity, service: avService), vendor, product))
         }
 
         return result.map { $0.transport }
@@ -103,6 +106,18 @@ final class AppleSiliconDDCTransport: DDCTransport {
         let vendor = (productAttrs["LegacyManufacturerID"] as? UInt32) ?? 0
         let product = (productAttrs["ProductID"] as? UInt32) ?? 0
         return (vendor, product)
+    }
+
+    /// Hardware identity ("vvvv-pppp-ssssssss" hex) for this display, from
+    /// its EDID vendor/product/serial - see `DDCTransport.edidIdentity`.
+    /// Requires at least vendor+product to be non-zero (both always
+    /// present when `productAttributes` succeeds); the serial itself is
+    /// optional per-monitor EDID data and defaults to 0 when absent.
+    private static func edidIdentity(_ service: io_service_t, vendor: UInt32, product: UInt32) -> String? {
+        guard vendor != 0 || product != 0 else { return nil }
+        let productAttrs = displayProductAttributes(service)
+        let serial = (productAttrs?["SerialNumber"] as? UInt32) ?? 0
+        return String(format: "%04x-%04x-%08x", vendor, product, serial)
     }
 
     /// The monitor's real product name, as encoded in its EDID (the

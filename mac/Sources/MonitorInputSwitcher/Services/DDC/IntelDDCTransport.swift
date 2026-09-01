@@ -9,10 +9,12 @@ import CoreGraphics
 /// I2C bus per IOFramebuffer that this API can address directly.
 final class IntelDDCTransport: DDCTransport {
     let displayName: String
+    let edidIdentity: String?
     private let interface: io_service_t
 
-    private init(displayName: String, interface: io_service_t) {
+    private init(displayName: String, edidIdentity: String?, interface: io_service_t) {
         self.displayName = displayName
+        self.edidIdentity = edidIdentity
         self.interface = interface
     }
 
@@ -57,16 +59,69 @@ final class IntelDDCTransport: DDCTransport {
                 continue
             }
 
+            // The framebuffer's EDID-derived vendor/product/serial lives
+            // on a descendant node (typically framebuffer -> "displayN"
+            // (IODisplayConnect) -> "AppleDisplay"), not on the
+            // framebuffer itself - same identity for every I2C bus this
+            // framebuffer exposes.
+            let edidIdentity = Self.lookupEdidIdentity(descendantOf: framebuffer)
+            NSLogInfo("IntelDDC: framebuffer #\(fbIndex) edidIdentity=\(edidIdentity ?? "nil")")
+
             for bus in 0..<busCount {
                 var interface: io_service_t = 0
                 guard IOFBCopyI2CInterfaceForBus(framebuffer, IOOptionBits(bus), &interface) == kIOReturnSuccess, interface != 0 else {
                     continue
                 }
-                result.append(IntelDDCTransport(displayName: "\(fbName) bus \(bus)", interface: interface))
+                result.append(IntelDDCTransport(displayName: "\(fbName) bus \(bus)", edidIdentity: edidIdentity, interface: interface))
             }
         }
         NSLogInfo("IntelDDC: discovered \(result.count) transport(s): \(result.map { $0.displayName })")
         return result
+    }
+
+    /// Walks down from an `IOFramebuffer` to find its EDID vendor/product/
+    /// serial. In the IORegistry this lives two levels down - typically
+    /// framebuffer -> "displayN" (class IODisplayConnect) -> "AppleDisplay"
+    /// - so this checks every child and grandchild for the relevant
+    /// properties rather than assuming an exact class name (that nesting
+    /// is what's actually observed, not documented API).
+    private static func lookupEdidIdentity(descendantOf service: io_service_t) -> String? {
+        var childIterator: io_iterator_t = 0
+        guard IORegistryEntryGetChildIterator(service, kIOServicePlane, &childIterator) == kIOReturnSuccess else {
+            return nil
+        }
+        defer { IOObjectRelease(childIterator) }
+
+        var child = IOIteratorNext(childIterator)
+        while child != 0 {
+            defer {
+                IOObjectRelease(child)
+                child = IOIteratorNext(childIterator)
+            }
+            if let identity = edidIdentity(fromDisplayNode: child) {
+                return identity
+            }
+            if let identity = lookupEdidIdentity(descendantOf: child) {
+                return identity
+            }
+        }
+        return nil
+    }
+
+    private static func edidIdentity(fromDisplayNode node: io_service_t) -> String? {
+        guard let vendor = ioRegistryUInt32(node, "DisplayVendorID"),
+            let product = ioRegistryUInt32(node, "DisplayProductID")
+        else { return nil }
+        let serial = ioRegistryUInt32(node, "DisplaySerialNumber") ?? 0
+        return String(format: "%04x-%04x-%08x", vendor, product, serial)
+    }
+
+    private static func ioRegistryUInt32(_ service: io_service_t, _ key: String) -> UInt32? {
+        guard let value = IORegistryEntryCreateCFProperty(service, key as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue() as? NSNumber else {
+            return nil
+        }
+        return value.uint32Value
     }
 
     func write(_ bytes: [UInt8]) -> Bool {

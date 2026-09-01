@@ -228,7 +228,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // guaranteed once there's more than one.
             let detectedName = index < detectedNames.count ? detectedNames[index] : transport.displayName
 
-            if let existingIndex = settings.monitors.firstIndex(where: { $0.transportKey == transport.displayName }) {
+            // Prefer matching by edidIdentity - it's a property of the
+            // monitor itself, so it still matches after the monitor moves
+            // to a different GPU port (transportKey/displayName wouldn't).
+            // Falls back to transportKey (bus label) for transports/configs
+            // that don't have EDID data.
+            var existingIndex: Int?
+            if let edidIdentity = transport.edidIdentity {
+                existingIndex = settings.monitors.firstIndex(where: { $0.edidIdentity == edidIdentity })
+            }
+            if existingIndex == nil {
+                existingIndex = settings.monitors.firstIndex(where: { $0.transportKey == transport.displayName })
+            }
+
+            if let existingIndex {
+                // Self-heal: backfill transportKey/edidIdentity for a
+                // config that predates this matching data (matched via
+                // the other key), so future rescans/uniqueId computation
+                // benefit too.
+                if settings.monitors[existingIndex].transportKey != transport.displayName {
+                    settings.monitors[existingIndex].transportKey = transport.displayName
+                    settingsChanged = true
+                }
+                if settings.monitors[existingIndex].edidIdentity != transport.edidIdentity, let edidIdentity = transport.edidIdentity {
+                    settings.monitors[existingIndex].edidIdentity = edidIdentity
+                    settingsChanged = true
+                }
                 let id = settings.monitors[existingIndex].id
                 claimed.insert(id)
                 newLiveTransports[id] = transport
@@ -237,6 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             if let placeholderIndex = settings.monitors.firstIndex(where: { $0.transportKey.isEmpty && !claimed.contains($0.id) }) {
                 settings.monitors[placeholderIndex].transportKey = transport.displayName
+                settings.monitors[placeholderIndex].edidIdentity = transport.edidIdentity
                 if settings.monitors[placeholderIndex].name.isEmpty || settings.monitors[placeholderIndex].name == "Monitor" {
                     settings.monitors[placeholderIndex].name = detectedName
                 }
@@ -247,7 +273,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 continue
             }
 
-            let newMonitor = MonitorConfig(transportKey: transport.displayName, name: detectedName, inputs: Settings.defaultInputTemplate())
+            let newMonitor = MonitorConfig(transportKey: transport.displayName, edidIdentity: transport.edidIdentity, name: detectedName, inputs: Settings.defaultInputTemplate())
             settings.monitors.append(newMonitor)
             claimed.insert(newMonitor.id)
             newLiveTransports[newMonitor.id] = transport
@@ -320,24 +346,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Publishes the Home Assistant MQTT Discovery config for one
-    /// monitor's input `select` entity. With a single monitor configured,
-    /// `uniqueId` is exactly `monitor_input_switcher_<clientIdSuffix>` -
-    /// unchanged from before multi-monitor support, so the entity already
-    /// set up in Home Assistant keeps its identity. Adding a second
-    /// monitor changes every monitor's uniqueId/topics (see `topics`),
-    /// which leaves the original entity's old discovery config orphaned
-    /// in HA (retained, but no longer referenced) - remove it there
-    /// manually if that happens.
+    /// monitor's input `select` entity.
     private func publishDiscoveryConfig(for monitor: MonitorConfig, in settings: Settings) {
         let options = monitor.inputs.map(\.mqttValue).filter { !$0.isEmpty }
         guard !options.isEmpty else { return }
         let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
         let (stateTopic, commandTopic) = topics(for: monitor, in: settings)
-        let uniqueId = settings.monitors.count > 1
-            ? "monitor_input_switcher_\(settings.clientIdSuffix)_\(monitor.id.uuidString.prefix(8).lowercased())"
-            : "monitor_input_switcher_\(settings.clientIdSuffix)"
         mqtt.publishDiscovery(
-            uniqueId: uniqueId,
+            uniqueId: uniqueId(for: monitor, in: settings),
             name: "\(monitor.name) Input",
             deviceName: monitor.name,
             appVersion: appVersion,
@@ -345,6 +361,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             commandTopic: commandTopic,
             options: options
         )
+    }
+
+    /// Home Assistant discovery unique_id for a monitor. When the monitor's
+    /// EDID identity is known, this is derived purely from that - the same
+    /// physical monitor gets the same unique_id (and therefore the same HA
+    /// device) no matter which Mac happens to be driving it. Falls back to
+    /// a per-install id (stable on this Mac, but not across Macs) for a
+    /// monitor whose EDID couldn't be read - older hardware, or a
+    /// transport type that doesn't expose one.
+    ///
+    /// Switching an existing single-monitor setup from the old
+    /// per-install-only scheme to an EDID-based one is a one-time breaking
+    /// change: the old `monitor_input_switcher_<clientIdSuffix>` entity is
+    /// orphaned in HA (retained, no longer referenced) - remove it there
+    /// manually once. Same when a second monitor is added, either way.
+    private func uniqueId(for monitor: MonitorConfig, in settings: Settings) -> String {
+        if let edidIdentity = monitor.edidIdentity {
+            return "monitor_input_switcher_\(edidIdentity.replacingOccurrences(of: "-", with: "_"))"
+        }
+        return settings.monitors.count > 1
+            ? "monitor_input_switcher_\(settings.clientIdSuffix)_\(monitor.id.uuidString.prefix(8).lowercased())"
+            : "monitor_input_switcher_\(settings.clientIdSuffix)"
     }
 
     private func showSettings() {
