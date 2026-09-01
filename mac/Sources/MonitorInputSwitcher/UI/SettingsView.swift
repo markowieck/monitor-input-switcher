@@ -52,6 +52,13 @@ struct SettingsView: View {
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 170, ideal: 190)
+            // The window has no title bar strip (see
+            // SettingsWindowController) - its traffic-light buttons float
+            // over the sidebar's own top-left corner instead, so the
+            // first row needs this much clearance to not sit under them.
+            .safeAreaInset(edge: .top) {
+                Color.clear.frame(height: 28)
+            }
         } detail: {
             ScrollView {
                 detailView

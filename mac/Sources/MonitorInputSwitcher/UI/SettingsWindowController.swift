@@ -7,7 +7,14 @@ final class SettingsWindowController: NSWindowController {
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
         window.title = "Monitor Input Switcher Settings"
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        // No separate title bar strip: traffic lights float over the
+        // sidebar's own background and the content extends up behind
+        // them, matching the look of BetterDisplay/System Settings-style
+        // utility windows. SettingsView reserves top padding above the
+        // sidebar list so its first row doesn't sit under the buttons.
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
         window.minSize = NSSize(width: 620, height: 420)
         window.isReleasedWhenClosed = false
         self.init(window: window)
