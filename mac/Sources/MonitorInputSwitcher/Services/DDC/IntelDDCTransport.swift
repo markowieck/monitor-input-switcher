@@ -115,9 +115,43 @@ final class IntelDDCTransport: DDCTransport {
             let product = ioRegistryUInt32(node, "DisplayProductID")
         else { return nil }
         let serialValue = ioRegistryUInt32(node, "DisplaySerialNumber") ?? 0
-        let identity = String(format: "%04x-%04x-%08x", vendor, product, serialValue)
-        let serial = serialValue != 0 ? String(format: "%08x", serialValue) : nil
+
+        // That numeric field is frequently a manufacturer-wide constant
+        // rather than a real per-unit value - confirmed on a Dell
+        // P2725QE, which reports the same 32-bit "serial" regardless of
+        // the actual unit. The EDID's own alphanumeric serial descriptor
+        // (when a monitor bothers to fill one in) is the real per-unit
+        // value, so prefer that when present - same policy already used
+        // on the Apple Silicon path's `AlphanumericSerialNumber`.
+        let alphanumericSerial = edidData(node).flatMap(Self.alphanumericSerial(fromEDID:))
+        let serial = alphanumericSerial ?? (serialValue != 0 ? String(format: "%08x", serialValue) : nil)
+        let identity = "\(String(format: "%04x-%04x", vendor, product))-\(serial ?? String(format: "%08x", serialValue))"
         return (identity, serial)
+    }
+
+    private static func edidData(_ node: io_service_t) -> Data? {
+        IORegistryEntryCreateCFProperty(node, "IODisplayEDID" as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue() as? Data
+    }
+
+    /// Parses the raw EDID's monitor descriptor blocks (4 x 18 bytes,
+    /// starting at byte 54) looking for the tag-0xFF "Display Serial
+    /// Number" text descriptor. Returns nil if the EDID is too short/not
+    /// well-formed, or doesn't carry one - many monitors don't.
+    private static func alphanumericSerial(fromEDID edid: Data) -> String? {
+        guard edid.count >= 126 else { return nil }
+        let bytes = [UInt8](edid)
+        for blockStart in stride(from: 54, to: 126, by: 18) {
+            let block = bytes[blockStart..<(blockStart + 18)]
+            let base = block.startIndex
+            guard block[base] == 0, block[base + 1] == 0, block[base + 2] == 0, block[base + 3] == 0xFF else {
+                continue
+            }
+            let text = String(decoding: block[(base + 5)..<(base + 18)], as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
+        }
+        return nil
     }
 
     private static func ioRegistryUInt32(_ service: io_service_t, _ key: String) -> UInt32? {
